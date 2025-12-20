@@ -8,7 +8,8 @@
 set -e
 
 # Configuration
-DOMAIN="${HALOS_DOMAIN:-halos.local}"
+HOSTNAME_SHORT=$(hostname -s 2>/dev/null || hostname | cut -d. -f1)
+DOMAIN="${HOSTNAME_SHORT}.local"
 PID_DIR="/tmp/mdns-publisher"
 
 # Create PID directory

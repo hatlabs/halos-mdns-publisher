@@ -19,9 +19,10 @@ services:
     network_mode: host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      - HALOS_DOMAIN=halos.local  # Optional, default is halos.local
+      - /var/run/dbus:/var/run/dbus
 ```
+
+The domain is automatically derived from the system hostname: `<hostname>.local`
 
 ## Container Labels
 
@@ -32,7 +33,7 @@ services:
   authelia:
     image: authelia/authelia:4.39
     labels:
-      - "halos.subdomain=auth"  # Advertises auth.halos.local
+      - "halos.subdomain=auth"  # Advertises auth.<hostname>.local
 ```
 
 ## How It Works

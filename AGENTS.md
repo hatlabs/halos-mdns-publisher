@@ -22,11 +22,11 @@ Docker image that advertises `*.halos.local` subdomains via Avahi/mDNS. Monitors
 
 ### Container Labels
 
-Containers can set `halos.subdomain=auth` to advertise `auth.halos.local`.
+Containers can set `halos.subdomain=auth` to advertise `auth.<hostname>.local`.
 
-### Environment Variables
+### Domain
 
-- `HALOS_DOMAIN` - Base domain (default: `halos.local`)
+The domain is automatically derived from the system hostname: `<hostname>.local`
 
 ## Development Commands
 
