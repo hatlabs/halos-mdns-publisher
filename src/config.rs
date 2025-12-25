@@ -96,7 +96,9 @@ mod tests {
             assert_eq!(parts.len(), 4, "IP should have 4 parts");
             for part in parts {
                 // Verify each part is a valid u8 (0-255)
-                let _num: u8 = part.parse().expect("IP part should be a valid octet (0-255)");
+                let _num: u8 = part
+                    .parse()
+                    .expect("IP part should be a valid octet (0-255)");
             }
         }
     }
