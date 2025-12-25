@@ -1,0 +1,39 @@
+[package]
+name = "halos-mdns-publisher"
+version = "0.1.0"
+edition = "2021"
+authors = ["Hat Labs Ltd <info@hatlabs.fi>"]
+description = "Native systemd service that advertises container subdomains via mDNS"
+license = "MIT"
+repository = "https://github.com/hatlabs/halos-mdns-publisher"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full", "process", "signal"] }
+
+# Docker API client
+bollard = "0.18"
+
+# Async stream utilities
+futures-util = "0.3"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# System info
+gethostname = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[bin]]
+name = "halos-mdns-publisher"
+path = "src/main.rs"

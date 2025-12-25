@@ -1,3 +1,7 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
 # Editor files
 *.swp
 *.swo
@@ -11,3 +15,8 @@ Thumbs.db
 
 # Local development
 .env.local
+
+# Debian build artifacts
+*.deb
+debian/cargo/
+debian/halos-mdns-publisher/

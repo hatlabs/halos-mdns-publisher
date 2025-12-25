@@ -1,0 +1,20 @@
+# Lefthook configuration for halos-mdns-publisher
+# Install with: lefthook install
+
+pre-commit:
+  parallel: true
+  commands:
+    cargo-fmt:
+      glob: "*.rs"
+      run: cargo fmt --check
+      fail_text: "Rust formatting check failed. Run 'cargo fmt' to fix."
+
+    cargo-clippy:
+      glob: "*.rs"
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      fail_text: "Clippy found issues. Fix the warnings above."
+
+    cargo-test:
+      glob: "*.rs"
+      run: cargo test --quiet
+      fail_text: "Tests failed. Fix the failing tests above."

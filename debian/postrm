@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge|remove)
+        # Stop and disable the service if it's running
+        if [ -d /run/systemd/system ]; then
+            systemctl stop halos-mdns-publisher.service 2>/dev/null || true
+            systemctl disable halos-mdns-publisher.service 2>/dev/null || true
+            systemctl daemon-reload
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

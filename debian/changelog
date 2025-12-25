@@ -1,0 +1,9 @@
+halos-mdns-publisher (0.1.0) unstable; urgency=medium
+
+  * Initial native systemd service release
+  * Replaces container-based halos-mdns-publisher-container
+  * Rust implementation with bollard Docker API client
+  * Automatic container discovery via halos.subdomain label
+  * Graceful degradation when Docker is unavailable
+
+ -- Hat Labs Ltd <info@hatlabs.fi>  Wed, 25 Dec 2025 12:00:00 +0200

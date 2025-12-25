@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export CARGO_HOME = $(CURDIR)/debian/cargo
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release
+
+override_dh_auto_install:
+	install -D -m 755 target/release/halos-mdns-publisher \
+		debian/halos-mdns-publisher/usr/bin/halos-mdns-publisher
+	install -D -m 644 debian/halos-mdns-publisher.service \
+		debian/halos-mdns-publisher/lib/systemd/system/halos-mdns-publisher.service
+
+override_dh_auto_clean:
+	cargo clean || true
+	rm -rf $(CARGO_HOME)
+
+override_dh_auto_test:
+	# Skip tests during package build

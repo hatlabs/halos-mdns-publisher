@@ -2,23 +2,28 @@
 
 ## Repository Purpose
 
-Docker image that advertises `*.halos.local` subdomains via Avahi/mDNS. Monitors Docker containers for the `halos.subdomain` label and dynamically publishes/removes mDNS records.
+Native systemd service (Rust) that advertises container subdomains via Avahi/mDNS. Monitors Docker containers for the `halos.subdomain` label and dynamically publishes/removes mDNS records.
 
 ## Key Files
 
-- `Dockerfile` - Alpine-based image with bash, docker-cli, avahi-tools, jq
-- `publish-subdomains.sh` - Main script monitoring Docker events and managing avahi-publish
-- `VERSION` - Image version for tagging
+- `src/main.rs` - Entry point, CLI, signal handling, main service loop
+- `src/container_watcher.rs` - Docker event monitoring via bollard
+- `src/avahi_manager.rs` - avahi-publish subprocess management
+- `src/config.rs` - Configuration and hostname/IP detection
+- `src/error.rs` - Error types
+- `debian/` - Debian packaging files
+- `VERSION` - Package version for CI/CD
 
 ## Technical Notes
 
 ### How It Works
 
-1. Runs on host network to access Avahi daemon
-2. Monitors Docker socket for container events
-3. Scans containers for `halos.subdomain` label
-4. Uses `avahi-publish -a` to advertise subdomains
-5. Tracks PIDs in `/tmp/mdns-publisher/` for cleanup
+1. Waits for Docker daemon to be available (graceful degradation)
+2. Scans running containers for `halos.subdomain` label
+3. Spawns `avahi-publish -a` subprocesses for each subdomain
+4. Monitors Docker events via bollard async stream
+5. Starts/stops avahi-publish processes as containers start/stop
+6. Periodic health checks to restart failed avahi-publish processes
 
 ### Container Labels
 
@@ -28,30 +33,41 @@ Containers can set `halos.subdomain=auth` to advertise `auth.<hostname>.local`.
 
 The domain is automatically derived from the system hostname: `<hostname>.local`
 
+### Rust Crates
+
+- `bollard` - Docker API client (async)
+- `tokio` - Async runtime with process and signal support
+- `tracing` - Structured logging
+- `clap` - CLI argument parsing
+- `anyhow`/`thiserror` - Error handling
+
 ## Development Commands
 
 ```bash
 ./run help              # Show all commands
-./run build             # Build Docker image locally
-./run build-multiarch   # Build multi-arch image
-./run bump-version patch|minor|major  # Bump version
-./run install-hooks     # Install pre-commit hooks
+./run build             # Build debug binary
+./run build-release     # Build release binary
+./run test              # Run tests
+./run lint              # Run clippy and format check
+./run hooks-install     # Install pre-commit hooks
 ```
-
-## Version Management
-
-Uses bump2version for version management:
-- `VERSION` file is the source of truth
-- `.bumpversion.cfg` configures bump2version
-- `./run bump-version patch` bumps and commits automatically
 
 ## CI/CD
 
-- **main.yml**: Builds and pushes to ghcr.io on push to main
-- **pr.yml**: Builds (no push) on PRs for validation
-- **release.yml**: Tags stable releases when GitHub releases are published
+Uses shared-workflows for Debian package building:
+- **main.yml**: Builds and publishes to apt.hatlabs.fi unstable on push to main
+- **pr.yml**: Runs tests and linting on PRs
+- **release.yml**: Publishes to apt.hatlabs.fi stable when release is published
+
+## Debian Package
+
+- Package name: `halos-mdns-publisher`
+- Conflicts/Replaces: `halos-mdns-publisher-container` (old container-based package)
+- Dependencies: `avahi-daemon`, `avahi-utils`
+- Recommends: `docker.io` or `docker-ce`
 
 ## Related Repos
 
-- `halos-core-containers` - Contains `apps/mdns-publisher/` package that uses this image
+- `halos-core-containers` - Previously contained container-based mdns-publisher
 - `halos-distro` - Parent workspace
+- `homarr-container-adapter` - Similar Rust service pattern

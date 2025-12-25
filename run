@@ -19,64 +19,70 @@ fi
 readonly PROJECT_ROOT=$(pwd)
 
 ################################################################################
-# Docker Commands
+# Rust Development Commands
 
 function build {
-  #@ Build Docker image locally
-  #@ Category: Docker
-  echo "🐳 Building Docker image..."
-  docker build -t halos-mdns-publisher:dev .
-  echo "✅ Image built: halos-mdns-publisher:dev"
+  #@ Build Rust binary (debug mode)
+  #@ Category: Build
+  echo "🔨 Building halos-mdns-publisher (debug)..."
+  cargo build
+  echo "✅ Build complete: target/debug/halos-mdns-publisher"
 }
 
-function build-multiarch {
-  #@ Build multi-arch Docker image (amd64 + arm64)
-  #@ Category: Docker
-  echo "🐳 Building multi-arch Docker image..."
-  docker buildx build --platform linux/amd64,linux/arm64 -t halos-mdns-publisher:dev .
-  echo "✅ Multi-arch image built"
+function build-release {
+  #@ Build Rust binary (release mode)
+  #@ Category: Build
+  echo "🔨 Building halos-mdns-publisher (release)..."
+  cargo build --release
+  echo "✅ Build complete: target/release/halos-mdns-publisher"
 }
 
-################################################################################
-# Version Management Commands
+function test {
+  #@ Run all tests
+  #@ Category: Test
+  echo "🧪 Running tests..."
+  cargo test
+}
 
-function bump-version {
-  #@ Bump version using bump2version (patch|minor|major)
-  #@ Category: Version
-  local BUMP_TYPE="${1:-}"
+function check {
+  #@ Run cargo check (fast compile check)
+  #@ Category: Test
+  echo "🔍 Running cargo check..."
+  cargo check
+}
 
-  if [[ -z "$BUMP_TYPE" ]]; then
-    echo "Error: version bump type required"
-    echo "Usage: ./run bump-version [patch|minor|major]"
-    exit 1
-  fi
+function clippy {
+  #@ Run clippy linter
+  #@ Category: Test
+  echo "📎 Running clippy..."
+  cargo clippy --all-targets --all-features -- -D warnings
+}
 
-  if [[ ! "$BUMP_TYPE" =~ ^(patch|minor|major)$ ]]; then
-    echo "Error: invalid bump type '$BUMP_TYPE'"
-    echo "Usage: ./run bump-version [patch|minor|major]"
-    exit 1
-  fi
+function fmt {
+  #@ Format code with rustfmt
+  #@ Category: Test
+  echo "🎨 Formatting code..."
+  cargo fmt
+}
 
-  echo "🔢 Bumping $BUMP_TYPE version..."
+function fmt-check {
+  #@ Check code formatting
+  #@ Category: Test
+  echo "🔍 Checking code format..."
+  cargo fmt --check
+}
 
-  # Check if bumpversion is installed
-  if ! command -v bumpversion &> /dev/null; then
-    echo "Error: bumpversion not installed"
-    echo "Install with: pip install bump2version"
-    exit 1
-  fi
-
-  # Run bumpversion
-  bumpversion "$BUMP_TYPE"
-
-  echo "✅ Version bumped to $(cat VERSION)"
-  echo "📝 Changes have been committed automatically"
+function lint {
+  #@ Run all linting (fmt check + clippy)
+  #@ Category: Test
+  fmt-check
+  clippy
 }
 
 ################################################################################
 # Development Setup
 
-function install-hooks {
+function hooks-install {
   #@ Install pre-commit hooks using lefthook
   #@ Category: Setup
   if ! command -v lefthook &> /dev/null; then
@@ -87,7 +93,7 @@ function install-hooks {
   echo "✅ Pre-commit hooks installed"
 }
 
-function run-hooks {
+function hooks-run {
   #@ Run pre-commit hooks manually
   #@ Category: Setup
   if ! command -v lefthook &> /dev/null; then

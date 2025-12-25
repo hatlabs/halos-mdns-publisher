@@ -1,0 +1,24 @@
+[Unit]
+Description=HaLOS mDNS Subdomain Publisher
+Documentation=https://github.com/hatlabs/halos-mdns-publisher
+After=network.target avahi-daemon.service
+Wants=avahi-daemon.service
+# Note: does NOT require docker.service - graceful degradation
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/halos-mdns-publisher
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+# Allow Docker socket access
+SupplementaryGroups=docker
+
+[Install]
+WantedBy=multi-user.target

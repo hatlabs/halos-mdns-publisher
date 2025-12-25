@@ -1,0 +1,24 @@
+Source: halos-mdns-publisher
+Section: admin
+Priority: optional
+Maintainer: Hat Labs Ltd <info@hatlabs.fi>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, libssl-dev, pkg-config
+Standards-Version: 4.6.0
+Homepage: https://github.com/hatlabs/halos-mdns-publisher
+
+Package: halos-mdns-publisher
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, avahi-daemon, avahi-utils
+Recommends: docker.io | docker-ce
+Conflicts: halos-mdns-publisher-container
+Replaces: halos-mdns-publisher-container
+Description: HaLOS mDNS subdomain publisher
+ Native systemd service that advertises container subdomains via mDNS.
+ Monitors Docker containers for the halos.subdomain label and uses
+ avahi-publish to advertise the corresponding subdomains.
+ .
+ Features:
+  - Monitors Docker for containers with halos.subdomain label
+  - Publishes subdomains as <subdomain>.<hostname>.local
+  - Automatic cleanup when containers stop
+  - Graceful degradation if Docker is unavailable

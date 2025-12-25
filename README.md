@@ -1,28 +1,26 @@
 # HaLOS mDNS Publisher
 
-Advertises `*.halos.local` subdomains via Avahi/mDNS for HaLOS containers.
+Native systemd service that advertises container subdomains via mDNS for HaLOS.
 
 ## Overview
 
-This Docker image monitors running containers for the `halos.subdomain` label and uses `avahi-publish` to advertise the corresponding mDNS records. This enables automatic subdomain resolution for HaLOS services on the local network.
+This service monitors Docker containers for the `halos.subdomain` label and uses `avahi-publish` to advertise the corresponding mDNS records. This enables automatic subdomain resolution for HaLOS services on the local network.
 
-## Usage
+## Installation
 
-The container must run with host networking to access the Avahi daemon:
+The package is available from the Hat Labs APT repository:
 
-```yaml
-services:
-  mdns-publisher:
-    image: ghcr.io/hatlabs/halos-mdns-publisher:latest
-    container_name: mdns-publisher
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/run/dbus:/var/run/dbus
+```bash
+# Add Hat Labs repository (if not already added)
+curl -fsSL https://apt.hatlabs.fi/hat-labs-apt-key.asc | sudo gpg --dearmor -o /usr/share/keyrings/hatlabs-apt-key.gpg
+echo "deb [signed-by=/usr/share/keyrings/hatlabs-apt-key.gpg] https://apt.hatlabs.fi stable main" | sudo tee /etc/apt/sources.list.d/hatlabs.list
+
+# Install the package
+sudo apt update
+sudo apt install halos-mdns-publisher
 ```
 
-The domain is automatically derived from the system hostname: `<hostname>.local`
+The service starts automatically after installation.
 
 ## Container Labels
 
@@ -38,22 +36,63 @@ services:
 
 ## How It Works
 
-1. On startup, scans all running containers for `halos.subdomain` labels
+1. On startup, scans all running Docker containers for `halos.subdomain` labels
 2. Monitors Docker events for container start/stop
 3. Uses `avahi-publish` to advertise subdomains pointing to the host IP
 4. Cleans up mDNS records when containers stop
+5. Graceful degradation: waits for Docker if not immediately available
+
+## Service Management
+
+```bash
+# Check status
+sudo systemctl status halos-mdns-publisher
+
+# View logs
+sudo journalctl -u halos-mdns-publisher -f
+
+# Restart service
+sudo systemctl restart halos-mdns-publisher
+```
+
+## Command Line Options
+
+```
+Usage: halos-mdns-publisher [OPTIONS]
+
+Options:
+  -s, --socket <SOCKET>  Docker socket path [default: /var/run/docker.sock]
+  -d, --debug            Enable debug logging
+      --health-interval  Health check interval in seconds [default: 60]
+  -h, --help             Print help
+  -V, --version          Print version
+```
 
 ## Requirements
 
-- Host must have Avahi daemon running
-- Container needs access to Docker socket
-- Must run with `network_mode: host`
+- Avahi daemon (`avahi-daemon` package)
+- Avahi utilities (`avahi-utils` package)
+- Docker (recommended but not required at startup)
 
-## Building
+## Development
 
 ```bash
-docker build -t halos-mdns-publisher .
+# Build
+./run build
+
+# Run tests
+./run test
+
+# Run linting
+./run lint
+
+# Install pre-commit hooks
+./run hooks-install
 ```
+
+## Migration from Container Version
+
+This native package replaces the container-based `halos-mdns-publisher-container` package. The migration is automatic - installing this package will remove the container version.
 
 ## License
 
