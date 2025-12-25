@@ -1,14 +1,56 @@
 #!/bin/sh
 set -e
 
+# Revert nsswitch.conf changes on purge
+# Restores mdns4_minimal which is the Debian default
+revert_nsswitch() {
+    NSSWITCH="/etc/nsswitch.conf"
+    if [ -f "$NSSWITCH" ]; then
+        # Only revert if we previously changed it (mdns4 without _minimal)
+        # Use same pattern matching as postinst for consistency
+        if grep -q 'mdns4' "$NSSWITCH" && ! grep -q 'mdns4_minimal' "$NSSWITCH"; then
+            echo "Reverting nsswitch.conf mDNS configuration..."
+            sed -i 's/mdns4/mdns4_minimal/g' "$NSSWITCH"
+            echo "nsswitch.conf reverted: mdns4 -> mdns4_minimal"
+        elif grep -q 'mdns' "$NSSWITCH" && ! grep -q 'mdns_minimal' "$NSSWITCH"; then
+            sed -i 's/mdns/mdns_minimal/g' "$NSSWITCH"
+            echo "nsswitch.conf reverted: mdns -> mdns_minimal"
+        fi
+    fi
+}
+
+# Remove mdns.allow if it was installed by this package
+cleanup_mdns_allow() {
+    MDNS_ALLOW="/etc/mdns.allow"
+    if [ -f "$MDNS_ALLOW" ]; then
+        # Only remove if it contains our marker comment
+        if grep -q 'Installed by halos-mdns-publisher' "$MDNS_ALLOW" 2>/dev/null; then
+            echo "Removing /etc/mdns.allow..."
+            rm -f "$MDNS_ALLOW"
+        fi
+    fi
+}
+
 case "$1" in
-    purge|remove)
+    remove)
         # Stop and disable the service if it's running
         if [ -d /run/systemd/system ]; then
             systemctl stop halos-mdns-publisher.service 2>/dev/null || true
             systemctl disable halos-mdns-publisher.service 2>/dev/null || true
             systemctl daemon-reload
         fi
+        ;;
+    purge)
+        # Stop and disable the service if it's running
+        if [ -d /run/systemd/system ]; then
+            systemctl stop halos-mdns-publisher.service 2>/dev/null || true
+            systemctl disable halos-mdns-publisher.service 2>/dev/null || true
+            systemctl daemon-reload
+        fi
+        # Revert nsswitch.conf changes
+        revert_nsswitch
+        # Remove mdns.allow
+        cleanup_mdns_allow
         ;;
 esac
 

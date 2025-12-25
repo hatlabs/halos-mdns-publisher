@@ -1,10 +1,14 @@
 # HaLOS mDNS Publisher
 
-Native systemd service that advertises container subdomains via mDNS for HaLOS.
+Native systemd service that advertises container subdomains via mDNS for HaLOS, and configures the system to resolve multi-label mDNS hostnames.
 
 ## Overview
 
-This service monitors Docker containers for the `halos.subdomain` label and uses `avahi-publish` to advertise the corresponding mDNS records. This enables automatic subdomain resolution for HaLOS services on the local network.
+This package provides two key mDNS capabilities:
+
+1. **Publishing**: Monitors Docker containers for the `halos.subdomain` label and uses `avahi-publish` to advertise the corresponding mDNS records. This enables automatic subdomain resolution for HaLOS services on the local network.
+
+2. **Resolution**: Configures the system to resolve multi-label mDNS hostnames (e.g., `auth.hostname.local`). By default, Debian only resolves single-label `.local` names; this package enables full subdomain resolution.
 
 ## Installation
 
@@ -68,10 +72,22 @@ Options:
   -V, --version          Print version
 ```
 
+## mDNS Resolution Configuration
+
+This package configures the system to resolve multi-label mDNS hostnames by:
+
+1. Installing `/etc/mdns.allow` to permit resolution of all `.local` domain names
+2. Updating `/etc/nsswitch.conf` to use `mdns4` instead of `mdns4_minimal`
+
+The `mdns4_minimal` resolver (Debian default) only resolves 2-label hostnames like `hostname.local`. The `mdns4` resolver with `mdns.allow` enables resolution of multi-label names like `auth.hostname.local`.
+
+These changes are reverted when the package is purged (`apt purge halos-mdns-publisher`).
+
 ## Requirements
 
 - Avahi daemon (`avahi-daemon` package)
 - Avahi utilities (`avahi-utils` package)
+- libnss-mdns (`libnss-mdns` package) - for mDNS name resolution
 - Docker (recommended but not required at startup)
 
 ## Development

@@ -1,8 +1,30 @@
 #!/bin/sh
 set -e
 
+# Configure nsswitch.conf to use mdns4 instead of mdns4_minimal
+# This enables resolution of multi-label mDNS hostnames (e.g., auth.hostname.local)
+configure_nsswitch() {
+    NSSWITCH="/etc/nsswitch.conf"
+    if [ -f "$NSSWITCH" ]; then
+        # Check if we need to make changes
+        if grep -q 'mdns4_minimal' "$NSSWITCH"; then
+            echo "Configuring nsswitch.conf for multi-label mDNS resolution..."
+            # Replace mdns4_minimal with mdns4 (preserves the rest of the line)
+            sed -i 's/mdns4_minimal/mdns4/g' "$NSSWITCH"
+            echo "nsswitch.conf updated: mdns4_minimal -> mdns4"
+        elif grep -q 'mdns_minimal' "$NSSWITCH"; then
+            # Handle IPv4+IPv6 variant
+            sed -i 's/mdns_minimal/mdns/g' "$NSSWITCH"
+            echo "nsswitch.conf updated: mdns_minimal -> mdns"
+        fi
+    fi
+}
+
 case "$1" in
     configure)
+        # Configure mDNS resolution for multi-label hostnames
+        configure_nsswitch
+
         # Enable and start the service
         if [ -d /run/systemd/system ]; then
             systemctl daemon-reload

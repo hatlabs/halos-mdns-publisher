@@ -14,6 +14,8 @@ override_dh_auto_install:
 		debian/halos-mdns-publisher/usr/bin/halos-mdns-publisher
 	install -D -m 644 debian/halos-mdns-publisher.service \
 		debian/halos-mdns-publisher/lib/systemd/system/halos-mdns-publisher.service
+	install -D -m 644 debian/mdns.allow \
+		debian/halos-mdns-publisher/etc/mdns.allow
 
 override_dh_auto_clean:
 	cargo clean || true
