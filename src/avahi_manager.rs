@@ -10,6 +10,24 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::Result;
 
+/// Validate a subdomain as a valid DNS label.
+///
+/// A valid DNS label must:
+/// - Be 1-63 characters long
+/// - Contain only alphanumeric characters and hyphens
+/// - Not start or end with a hyphen
+fn is_valid_dns_label(label: &str) -> bool {
+    if label.is_empty() || label.len() > 63 {
+        return false;
+    }
+
+    if label.starts_with('-') || label.ends_with('-') {
+        return false;
+    }
+
+    label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// Manages avahi-publish subprocesses for mDNS publication
 pub struct AvahiManager {
     /// Domain suffix (e.g., "halos.local")
@@ -43,10 +61,21 @@ impl AvahiManager {
     /// Publish a subdomain for a container
     ///
     /// If already publishing for this container, does nothing.
+    /// Returns Ok(()) if the subdomain is invalid (with a warning logged).
     pub async fn publish(&mut self, container_id: &str, subdomain: &str) -> Result<()> {
         // Skip empty subdomains
         if subdomain.is_empty() {
             debug!("Skipping empty subdomain for container {}", container_id);
+            return Ok(());
+        }
+
+        // Validate subdomain as a DNS label
+        if !is_valid_dns_label(subdomain) {
+            warn!(
+                "Invalid subdomain '{}' for container {} - must be 1-63 chars, alphanumeric/hyphens, not start/end with hyphen",
+                subdomain,
+                &container_id[..12.min(container_id.len())]
+            );
             return Ok(());
         }
 
@@ -207,5 +236,44 @@ mod tests {
         assert_eq!(manager.domain, "test.local");
         assert_eq!(manager.host_ip, "10.0.0.1");
         assert_eq!(manager.active_count(), 0);
+    }
+
+    #[test]
+    fn test_valid_dns_labels() {
+        // Valid labels
+        assert!(is_valid_dns_label("app"));
+        assert!(is_valid_dns_label("my-app"));
+        assert!(is_valid_dns_label("app123"));
+        assert!(is_valid_dns_label("123app"));
+        assert!(is_valid_dns_label("a"));
+        assert!(is_valid_dns_label("my-cool-app-2024"));
+
+        // 63 characters (max valid length)
+        assert!(is_valid_dns_label(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+    }
+
+    #[test]
+    fn test_invalid_dns_labels() {
+        // Empty
+        assert!(!is_valid_dns_label(""));
+
+        // Too long (64 characters)
+        assert!(!is_valid_dns_label(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+
+        // Starts with hyphen
+        assert!(!is_valid_dns_label("-app"));
+
+        // Ends with hyphen
+        assert!(!is_valid_dns_label("app-"));
+
+        // Contains invalid characters
+        assert!(!is_valid_dns_label("app.name"));
+        assert!(!is_valid_dns_label("app_name"));
+        assert!(!is_valid_dns_label("app name"));
+        assert!(!is_valid_dns_label("app@name"));
     }
 }

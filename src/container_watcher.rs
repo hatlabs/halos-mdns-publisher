@@ -142,10 +142,11 @@ impl ContainerWatcher {
 
     /// Watch for container events (start/stop)
     ///
-    /// Returns an async stream of ContainerEvent
+    /// Returns an async stream of optional ContainerEvents.
+    /// Returns None for containers that don't have the subdomain label on start.
     pub async fn watch_events(
         &self,
-    ) -> impl futures_util::Stream<Item = Result<ContainerEvent>> + '_ {
+    ) -> impl futures_util::Stream<Item = Result<Option<ContainerEvent>>> + '_ {
         let mut filters = HashMap::new();
         filters.insert("type".to_string(), vec!["container".to_string()]);
         filters.insert(
@@ -187,10 +188,14 @@ impl ContainerWatcher {
                         "start" => {
                             // Inspect to get subdomain
                             match self.inspect_container(&container_id).await {
-                                Ok(Some(info)) => Ok(ContainerEvent::Started(info)),
+                                Ok(Some(info)) => Ok(Some(ContainerEvent::Started(info))),
                                 Ok(None) => {
-                                    // Container doesn't have subdomain label, emit stop to clean up any stale state
-                                    Ok(ContainerEvent::Stopped(container_id))
+                                    // Container doesn't have subdomain label, no event needed
+                                    debug!(
+                                        "Container '{}' has no subdomain label, ignoring",
+                                        container_name
+                                    );
+                                    Ok(None)
                                 }
                                 Err(e) => {
                                     warn!("Failed to inspect container {}: {}", container_id, e);
@@ -198,10 +203,12 @@ impl ContainerWatcher {
                                 }
                             }
                         }
-                        "stop" | "die" | "destroy" => Ok(ContainerEvent::Stopped(container_id)),
+                        "stop" | "die" | "destroy" => {
+                            Ok(Some(ContainerEvent::Stopped(container_id)))
+                        }
                         _ => {
-                            // Unknown event, treat as stop
-                            Ok(ContainerEvent::Stopped(container_id))
+                            // Unknown event, treat as stop to clean up any stale state
+                            Ok(Some(ContainerEvent::Stopped(container_id)))
                         }
                     }
                 }

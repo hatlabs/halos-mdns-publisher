@@ -163,8 +163,11 @@ async fn watch_loop(
             // Handle Docker events
             Some(event_result) = events.next() => {
                 match event_result {
-                    Ok(event) => {
+                    Ok(Some(event)) => {
                         handle_event(avahi, event).await;
+                    }
+                    Ok(None) => {
+                        // Container without subdomain label, nothing to do
                     }
                     Err(e) => {
                         error!("Docker event stream error: {}. Reconnecting...", e);

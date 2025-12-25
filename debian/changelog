@@ -6,4 +6,4 @@ halos-mdns-publisher (0.1.0) unstable; urgency=medium
   * Automatic container discovery via halos.subdomain label
   * Graceful degradation when Docker is unavailable
 
- -- Hat Labs Ltd <info@hatlabs.fi>  Wed, 25 Dec 2024 12:00:00 +0200
+ -- Hat Labs Ltd <info@hatlabs.fi>  Wed, 25 Dec 2025 12:00:00 +0200
