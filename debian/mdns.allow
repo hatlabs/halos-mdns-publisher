@@ -1,0 +1,12 @@
+# /etc/mdns.allow - Configure which domains nss-mdns resolves
+# Installed by halos-mdns-publisher to enable multi-label mDNS resolution
+#
+# By default, nss-mdns only resolves single-label .local names (e.g., hostname.local).
+# This configuration enables resolution of multi-label names like auth.hostname.local,
+# which are used by HaLOS container subdomains.
+#
+# See nss-mdns(5) for more information.
+
+# Allow all .local domain names (including multi-label like auth.hostname.local)
+.local.
+.local
