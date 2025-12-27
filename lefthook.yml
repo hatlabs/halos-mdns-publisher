@@ -18,3 +18,7 @@ pre-commit:
       glob: "*.rs"
       run: cargo test --quiet
       fail_text: "Tests failed. Fix the failing tests above."
+
+    check-hostnames:
+      run: .github/scripts/check-hardcoded-hostnames.sh
+      fail_text: "Hard-coded hostname references found. See error above for details."
