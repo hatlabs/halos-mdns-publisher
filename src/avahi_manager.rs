@@ -30,7 +30,7 @@ fn is_valid_dns_label(label: &str) -> bool {
 
 /// Manages avahi-publish subprocesses for mDNS publication
 pub struct AvahiManager {
-    /// Domain suffix (e.g., "halos.local")
+    /// Domain suffix (e.g., "myhostname.local")
     domain: String,
     /// Host IP address to advertise
     host_ip: String,
@@ -222,10 +222,10 @@ mod tests {
 
     #[test]
     fn test_fqdn_construction() {
-        let manager = AvahiManager::new("halos.local", "192.168.1.100");
+        let manager = AvahiManager::new("test.local", "192.168.1.100");
 
         // FQDN should be subdomain.domain
-        let expected_fqdn = "app.halos.local";
+        let expected_fqdn = "app.test.local";
         let actual_fqdn = format!("{}.{}", "app", manager.domain);
         assert_eq!(actual_fqdn, expected_fqdn);
     }

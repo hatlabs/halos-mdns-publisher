@@ -10,7 +10,7 @@ pub struct Config {
     /// Docker socket path
     pub docker_socket: String,
 
-    /// mDNS domain suffix (e.g., "halos.local")
+    /// mDNS domain suffix (e.g., "myhostname.local")
     pub domain: String,
 
     /// Host IP address to advertise
