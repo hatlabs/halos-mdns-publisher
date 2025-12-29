@@ -1,3 +1,8 @@
 # halos-mdns-publisher is a systemd service, not a user-facing command
 # A man page is not necessary as the service is configured via systemd
 halos-mdns-publisher: no-manual-page [usr/bin/halos-mdns-publisher]
+
+# Using direct systemctl calls is intentional for this package
+# (not using full debhelper integration)
+halos-mdns-publisher: maintainer-script-calls-systemctl
+halos-mdns-publisher: maintainer-script-has-unexpanded-debhelper-token

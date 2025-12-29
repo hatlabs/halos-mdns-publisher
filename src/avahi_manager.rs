@@ -193,26 +193,10 @@ impl AvahiManager {
         tokio::time::sleep(Duration::from_millis(VERIFICATION_DELAY_MS)).await;
 
         // Check if process is still running
-        if let Some(process) = self.processes.get_mut(container_id) {
+        let process_status = if let Some(process) = self.processes.get_mut(container_id) {
             match process.child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process exited early - this is bad
-                    let stderr_output = Self::read_stderr(&mut process.stderr).await;
-                    error!(
-                        "avahi-publish for {} exited immediately with status: {}{}",
-                        fqdn,
-                        status,
-                        if stderr_output.is_empty() {
-                            String::new()
-                        } else {
-                            format!("\nstderr: {}", stderr_output)
-                        }
-                    );
-                    return;
-                }
-                Ok(None) => {
-                    // Still running, good
-                }
+                Ok(Some(status)) => Some(status),
+                Ok(None) => None, // Still running
                 Err(e) => {
                     error!("Error checking avahi-publish status for {}: {}", fqdn, e);
                     return;
@@ -220,6 +204,25 @@ impl AvahiManager {
             }
         } else {
             // Process was removed (container stopped?)
+            return;
+        };
+
+        // If process exited early, remove it and log the error
+        if let Some(status) = process_status {
+            // Remove the dead process to prevent duplicate logging in check_health
+            if let Some(mut process) = self.processes.remove(container_id) {
+                let stderr_output = Self::read_stderr(&mut process.stderr).await;
+                error!(
+                    "avahi-publish for {} exited immediately with status: {}{}",
+                    fqdn,
+                    status,
+                    if stderr_output.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\nstderr: {}", stderr_output)
+                    }
+                );
+            }
             return;
         }
 
@@ -235,32 +238,36 @@ impl AvahiManager {
                     fqdn, e
                 );
 
-                // Check if the process is still running and get any stderr output
-                if let Some(process) = self.processes.get_mut(container_id) {
-                    match process.child.try_wait() {
-                        Ok(Some(status)) => {
-                            let stderr_output = Self::read_stderr(&mut process.stderr).await;
-                            error!(
-                                "avahi-publish for {} exited with status: {}{}",
-                                fqdn,
-                                status,
-                                if stderr_output.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!("\nstderr: {}", stderr_output)
-                                }
-                            );
-                        }
-                        Ok(None) => {
-                            debug!(
-                                "avahi-publish for {} is still running despite resolution failure",
-                                fqdn
-                            );
-                        }
-                        Err(e) => {
-                            error!("Error checking avahi-publish status: {}", e);
-                        }
+                // Check if the process is still running
+                let process_died = if let Some(process) = self.processes.get_mut(container_id) {
+                    matches!(process.child.try_wait(), Ok(Some(_)))
+                } else {
+                    false
+                };
+
+                // If process died, remove it and log with stderr
+                if process_died {
+                    if let Some(mut process) = self.processes.remove(container_id) {
+                        let status = process.child.try_wait().ok().flatten();
+                        let stderr_output = Self::read_stderr(&mut process.stderr).await;
+                        error!(
+                            "avahi-publish for {} exited with status: {}{}",
+                            fqdn,
+                            status
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            if stderr_output.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\nstderr: {}", stderr_output)
+                            }
+                        );
                     }
+                } else {
+                    debug!(
+                        "avahi-publish for {} is still running despite resolution failure",
+                        fqdn
+                    );
                 }
             }
         }
