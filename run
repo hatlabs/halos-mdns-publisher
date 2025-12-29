@@ -80,6 +80,31 @@ function lint {
 }
 
 ################################################################################
+# Debian Packaging
+
+function build-deb {
+  #@ Build Debian package for arm64
+  #@ Category: Package
+  echo "📦 Building Debian package..."
+  .github/scripts/build-deb-package.sh
+}
+
+function check-lintian {
+  #@ Run lintian on built package
+  #@ Category: Package
+  local deb_file
+  deb_file=$(ls -t *.deb 2>/dev/null | head -1)
+  if [[ -z "$deb_file" ]]; then
+    echo "❌ No .deb file found. Run 'build-deb' first."
+    exit 1
+  fi
+  echo "🔍 Running lintian on $deb_file..."
+  docker run --rm -v "$(pwd):/build" -w /build rust-debtools:latest \
+    lintian --info --display-info --fail-on error,warning "$deb_file"
+  echo "✅ Lintian check passed"
+}
+
+################################################################################
 # Development Setup
 
 function hooks-install {

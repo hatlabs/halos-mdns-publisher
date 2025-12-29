@@ -28,15 +28,17 @@ docker run --rm \
         rm -rf "$PKG_DIR"
         mkdir -p "$PKG_DIR/DEBIAN"
         mkdir -p "$PKG_DIR/usr/bin"
-        mkdir -p "$PKG_DIR/lib/systemd/system"
+        mkdir -p "$PKG_DIR/usr/lib/systemd/system"
+        mkdir -p "$PKG_DIR/usr/share/doc/${PACKAGE_NAME}"
         mkdir -p "$PKG_DIR/etc"
 
-        # Copy binary
+        # Copy and strip binary
         cp target/aarch64-unknown-linux-gnu/release/halos-mdns-publisher "$PKG_DIR/usr/bin/"
+        aarch64-linux-gnu-strip "$PKG_DIR/usr/bin/halos-mdns-publisher"
         chmod 755 "$PKG_DIR/usr/bin/halos-mdns-publisher"
 
-        # Copy systemd service
-        cp debian/halos-mdns-publisher.service "$PKG_DIR/lib/systemd/system/"
+        # Copy systemd service (use /usr/lib not /lib for Debian Trixie)
+        cp debian/halos-mdns-publisher.service "$PKG_DIR/usr/lib/systemd/system/"
 
         # Copy mdns.allow if it exists
         if [ -f debian/mdns.allow ]; then
@@ -59,15 +61,18 @@ docker run --rm \
             grep "^Section:" debian/control || echo "Section: admin"
             grep "^Priority:" debian/control || echo "Priority: optional"
             grep "^Maintainer:" debian/control
-            # Extract Depends, removing template variables
+            # Extract Depends, removing template variables, and add libc6
             DEPENDS=$(grep "^Depends:" debian/control | sed "s/\${[^}]*}, *//g" | sed "s/, *\${[^}]*}//g")
-            echo "$DEPENDS"
+            echo "${DEPENDS}, libc6"
             grep "^Recommends:" debian/control || true
             grep "^Conflicts:" debian/control || true
             grep "^Replaces:" debian/control || true
             # Extract description (everything from Description: to end of file in Package stanza)
             sed -n "/^Description:/,/^$/p" debian/control | head -n -1
         } > "$PKG_DIR/DEBIAN/control"
+
+        # Create conffiles for files in /etc
+        echo "/etc/mdns.allow" > "$PKG_DIR/DEBIAN/conffiles"
 
         # Copy maintainer scripts from debian/ directory
         cp debian/postinst "$PKG_DIR/DEBIAN/postinst"
@@ -80,6 +85,17 @@ docker run --rm \
         if [ -f "debian/${PACKAGE_NAME}.lintian-overrides" ]; then
             mkdir -p "$PKG_DIR/usr/share/lintian/overrides"
             cp "debian/${PACKAGE_NAME}.lintian-overrides" "$PKG_DIR/usr/share/lintian/overrides/${PACKAGE_NAME}"
+            chmod 644 "$PKG_DIR/usr/share/lintian/overrides/${PACKAGE_NAME}"
+        fi
+
+        # Create changelog.gz (use -n for reproducible builds)
+        if [ -f debian/changelog ]; then
+            gzip -9 -n -c debian/changelog > "$PKG_DIR/usr/share/doc/${PACKAGE_NAME}/changelog.gz"
+        fi
+
+        # Copy copyright file
+        if [ -f debian/copyright ]; then
+            cp debian/copyright "$PKG_DIR/usr/share/doc/${PACKAGE_NAME}/copyright"
         fi
 
         # Build the package

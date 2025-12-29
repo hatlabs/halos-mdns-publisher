@@ -4,9 +4,9 @@ halos-mdns-publisher (0.1.1) unstable; urgency=medium
   * Configure nsswitch.conf to use mdns4 instead of mdns4_minimal
   * Install /etc/mdns.allow for .local domain resolution
   * Add libnss-mdns as package dependency
-  * Fixes: Device cannot resolve its own mDNS subdomains (e.g., auth.hostname.local)
+  * Fix: Device cannot resolve its own mDNS subdomains
 
- -- Hat Labs Ltd <info@hatlabs.fi>  Wed, 25 Dec 2025 14:00:00 +0200
+ -- Hat Labs Ltd <info@hatlabs.fi>  Thu, 25 Dec 2025 14:00:00 +0200
 
 halos-mdns-publisher (0.1.0) unstable; urgency=medium
 
@@ -16,4 +16,4 @@ halos-mdns-publisher (0.1.0) unstable; urgency=medium
   * Automatic container discovery via halos.subdomain label
   * Graceful degradation when Docker is unavailable
 
- -- Hat Labs Ltd <info@hatlabs.fi>  Wed, 25 Dec 2025 12:00:00 +0200
+ -- Hat Labs Ltd <info@hatlabs.fi>  Thu, 25 Dec 2025 12:00:00 +0200
