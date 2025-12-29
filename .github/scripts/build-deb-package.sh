@@ -56,6 +56,8 @@ docker run --rm \
             echo "Package: ${PACKAGE_NAME}"
             echo "Version: ${DEB_VERSION}"
             echo "Architecture: arm64"
+            grep "^Section:" debian/control || echo "Section: admin"
+            grep "^Priority:" debian/control || echo "Priority: optional"
             grep "^Maintainer:" debian/control
             # Extract Depends, removing template variables
             DEPENDS=$(grep "^Depends:" debian/control | sed "s/\${[^}]*}, *//g" | sed "s/, *\${[^}]*}//g")
@@ -73,6 +75,12 @@ docker run --rm \
 
         cp debian/postrm "$PKG_DIR/DEBIAN/postrm"
         chmod 755 "$PKG_DIR/DEBIAN/postrm"
+
+        # Copy lintian overrides if they exist
+        if [ -f "debian/${PACKAGE_NAME}.lintian-overrides" ]; then
+            mkdir -p "$PKG_DIR/usr/share/lintian/overrides"
+            cp "debian/${PACKAGE_NAME}.lintian-overrides" "$PKG_DIR/usr/share/lintian/overrides/${PACKAGE_NAME}"
+        fi
 
         # Build the package
         dpkg-deb --build "$PKG_DIR"
