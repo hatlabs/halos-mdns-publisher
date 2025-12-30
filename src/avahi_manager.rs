@@ -19,6 +19,9 @@ const VERIFICATION_DELAY_MS: u64 = 1500;
 /// Timeout for resolution verification.
 const VERIFICATION_TIMEOUT_MS: u64 = 2000;
 
+/// Maximum number of retry attempts when verification fails.
+const MAX_VERIFICATION_RETRIES: u32 = 3;
+
 /// Validate a subdomain as a valid DNS label.
 ///
 /// A valid DNS label must:
@@ -112,36 +115,66 @@ impl AvahiManager {
 
         let fqdn = format!("{}.{}", subdomain, self.domain);
 
-        info!("Publishing {} -> {}", fqdn, self.host_ip);
+        // Retry loop for verification failures
+        for retry_count in 0..=MAX_VERIFICATION_RETRIES {
+            if retry_count > 0 {
+                info!(
+                    "Publishing {} -> {} (retry {}/{})",
+                    fqdn, self.host_ip, retry_count, MAX_VERIFICATION_RETRIES
+                );
+            } else {
+                info!("Publishing {} -> {}", fqdn, self.host_ip);
+            }
 
-        // Spawn avahi-publish-address process with --no-reverse to avoid
-        // "Local name collision" errors when publishing subdomains of the host's domain
-        let mut child = Command::new("avahi-publish-address")
-            .args(["--no-reverse", &fqdn, &self.host_ip])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+            // Spawn avahi-publish-address process with --no-reverse to avoid
+            // "Local name collision" errors when publishing subdomains of the host's domain
+            let mut child = Command::new("avahi-publish-address")
+                .args(["--no-reverse", &fqdn, &self.host_ip])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
 
-        // Take stderr handle so we can read it later if the process fails
-        let stderr = child.stderr.take();
+            // Take stderr handle so we can read it later if the process fails
+            let stderr = child.stderr.take();
 
-        let process = AvahiProcess {
-            child,
-            stderr,
-            fqdn: fqdn.clone(),
-            subdomain: subdomain.to_string(),
-        };
+            let process = AvahiProcess {
+                child,
+                stderr,
+                fqdn: fqdn.clone(),
+                subdomain: subdomain.to_string(),
+            };
 
-        self.processes.insert(container_id.to_string(), process);
+            self.processes.insert(container_id.to_string(), process);
 
-        info!(
-            "Started avahi-publish for {} (container {})",
-            fqdn,
-            &container_id[..12.min(container_id.len())]
+            info!(
+                "Started avahi-publish for {} (container {})",
+                fqdn,
+                &container_id[..12.min(container_id.len())]
+            );
+
+            // Verify that the record is actually resolvable
+            let verified = self.verify_publication(container_id, &fqdn).await;
+
+            if verified {
+                return Ok(());
+            }
+
+            // If verification failed and we have retries left, loop will continue
+            // (verify_publication already called unpublish on failure)
+            if retry_count < MAX_VERIFICATION_RETRIES {
+                warn!(
+                    "Verification failed for {}, retrying ({}/{})",
+                    fqdn,
+                    retry_count + 1,
+                    MAX_VERIFICATION_RETRIES
+                );
+            }
+        }
+
+        error!(
+            "Failed to publish {} after {} retries, giving up",
+            fqdn, MAX_VERIFICATION_RETRIES
         );
-
-        // Verify that the record is actually resolvable
-        self.verify_publication(container_id, &fqdn).await;
 
         Ok(())
     }
@@ -187,8 +220,9 @@ impl AvahiManager {
     /// Verify that a published record is resolvable.
     ///
     /// Waits for mDNS probing to complete, then tests resolution.
-    /// Logs warnings if resolution fails but doesn't fail the operation.
-    async fn verify_publication(&mut self, container_id: &str, fqdn: &str) {
+    /// Returns true if verification succeeded, false otherwise.
+    /// On failure, the process is killed and removed to allow retry.
+    async fn verify_publication(&mut self, container_id: &str, fqdn: &str) -> bool {
         // Wait for mDNS probing to complete
         tokio::time::sleep(Duration::from_millis(VERIFICATION_DELAY_MS)).await;
 
@@ -199,12 +233,12 @@ impl AvahiManager {
                 Ok(None) => None, // Still running
                 Err(e) => {
                     error!("Error checking avahi-publish status for {}: {}", fqdn, e);
-                    return;
+                    return false;
                 }
             }
         } else {
             // Process was removed (container stopped?)
-            return;
+            return false;
         };
 
         // If process exited early, remove it and log the error
@@ -223,26 +257,23 @@ impl AvahiManager {
                     }
                 );
             }
-            return;
+            return false;
         }
 
         // Try to resolve the name using avahi-resolve
         match Self::test_resolution(fqdn).await {
             Ok(resolved_ip) => {
                 info!("Verified: {} resolves to {}", fqdn, resolved_ip);
+                true
             }
             Err(e) => {
-                warn!(
-                    "Resolution verification failed for {}: {}. \
-                     The mDNS record may not be reachable from other devices.",
-                    fqdn, e
-                );
+                warn!("Resolution verification failed for {}: {}", fqdn, e);
 
                 // Check if the process is still running
                 let process_died = if let Some(process) = self.processes.get_mut(container_id) {
                     matches!(process.child.try_wait(), Ok(Some(_)))
                 } else {
-                    false
+                    true // Process already removed
                 };
 
                 // If process died, remove it and log with stderr
@@ -264,11 +295,14 @@ impl AvahiManager {
                         );
                     }
                 } else {
-                    debug!(
-                        "avahi-publish for {} is still running despite resolution failure",
+                    // Process is running but not resolving - kill it to allow retry
+                    warn!(
+                        "avahi-publish for {} is running but not resolving, killing for retry",
                         fqdn
                     );
+                    self.unpublish(container_id).await;
                 }
+                false
             }
         }
     }
