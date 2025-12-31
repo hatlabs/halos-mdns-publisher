@@ -24,10 +24,20 @@ case "$1" in
     configure)
         # Configure mDNS resolution for multi-label hostnames
         configure_nsswitch
-        # Service enablement is handled by dh_installsystemd via #DEBHELPER#
+
+        # Enable the systemd service
+        # Using deb-systemd-helper which works in chroots during image build
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper unmask 'halos-mdns-publisher.service' >/dev/null || true
+            deb-systemd-helper enable 'halos-mdns-publisher.service' >/dev/null || true
+        fi
+
+        # Start the service if systemd is running
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+            systemctl start halos-mdns-publisher.service >/dev/null || true
+        fi
         ;;
 esac
-
-#DEBHELPER#
 
 exit 0
