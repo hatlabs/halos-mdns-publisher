@@ -4,7 +4,7 @@ halos-mdns-publisher (0.2.1) unstable; urgency=medium
   * Use dh_installsystemd for proper service management
   * Service is automatically enabled and started on install
 
- -- Hat Labs Ltd <info@hatlabs.fi>  Tue, 31 Dec 2025 12:00:00 +0200
+ -- Hat Labs Ltd <info@hatlabs.fi>  Wed, 31 Dec 2025 12:00:00 +0200
 
 halos-mdns-publisher (0.1.1) unstable; urgency=medium
 
