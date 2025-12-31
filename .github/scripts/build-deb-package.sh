@@ -101,8 +101,11 @@ docker run --rm \
         # Build the package
         dpkg-deb --build "$PKG_DIR"
 
-        # Rename to standard format
-        mv "${PKG_DIR}.deb" "${PACKAGE_NAME}_${DEB_VERSION}_arm64.deb"
+        # Rename to standard format (only if different)
+        OUTPUT_NAME="${PACKAGE_NAME}_${DEB_VERSION}_arm64.deb"
+        if [ "${PKG_DIR}.deb" != "$OUTPUT_NAME" ]; then
+            mv "${PKG_DIR}.deb" "$OUTPUT_NAME"
+        fi
 
         echo "=== Package built successfully ==="
         ls -la *.deb

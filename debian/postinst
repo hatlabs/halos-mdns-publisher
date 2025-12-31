@@ -24,13 +24,7 @@ case "$1" in
     configure)
         # Configure mDNS resolution for multi-label hostnames
         configure_nsswitch
-
-        # Enable and start the service
-        if [ -d /run/systemd/system ]; then
-            systemctl daemon-reload
-            systemctl enable halos-mdns-publisher.service
-            systemctl start halos-mdns-publisher.service || true
-        fi
+        # Service enablement is handled by dh_installsystemd via #DEBHELPER#
         ;;
 esac
 
