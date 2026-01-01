@@ -1,6 +1,6 @@
 [package]
 name = "halos-mdns-publisher"
-version = "0.2.1"
+version = "0.2.3"
 edition = "2021"
 authors = ["Hat Labs Ltd <info@hatlabs.fi>"]
 description = "Native systemd service that advertises container subdomains via mDNS"

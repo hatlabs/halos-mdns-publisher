@@ -52,6 +52,28 @@ The domain is automatically derived from the system hostname: `<hostname>.local`
 ./run hooks-install     # Install pre-commit hooks
 ```
 
+## Versioning
+
+**IMPORTANT**: Always use `./run bumpversion` to change versions. Never edit version files manually.
+
+```bash
+./run bumpversion patch    # Bump patch version (0.2.3 -> 0.2.4)
+./run bumpversion minor    # Bump minor version (0.2.3 -> 0.3.0)
+./run bumpversion major    # Bump major version (0.2.3 -> 1.0.0)
+```
+
+After running, commit the changes:
+```bash
+git add VERSION Cargo.toml .bumpversion.cfg
+git commit -m "chore: bump version to $(cat VERSION)"
+```
+
+**Version files that must stay synchronized:**
+- `VERSION` - Canonical source, read by CI
+- `Cargo.toml` - Rust package version
+
+**Note:** `debian/changelog` is generated dynamically by CI from the VERSION file.
+
 ## CI/CD
 
 Uses shared-workflows for Debian package building:
