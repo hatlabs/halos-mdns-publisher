@@ -144,8 +144,13 @@ impl ContainerWatcher {
     ///
     /// Returns an async stream of optional ContainerEvents.
     /// Returns None for containers that don't have the subdomain label on start.
+    ///
+    /// The `since` parameter specifies the Unix timestamp from which to start
+    /// receiving events. This should be captured before scanning containers
+    /// to avoid missing events that occur during the scan.
     pub async fn watch_events(
         &self,
+        since: Option<i64>,
     ) -> impl futures_util::Stream<Item = Result<Option<ContainerEvent>>> + '_ {
         let mut filters = HashMap::new();
         filters.insert("type".to_string(), vec!["container".to_string()]);
@@ -160,7 +165,7 @@ impl ContainerWatcher {
         );
 
         let options = EventsOptions {
-            since: None,
+            since: since.map(|t| t.to_string()),
             until: None,
             filters,
         };

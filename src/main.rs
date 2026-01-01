@@ -9,7 +9,7 @@ mod config;
 mod container_watcher;
 mod error;
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use futures_util::StreamExt;
@@ -71,6 +71,13 @@ async fn run_service(config: Config, health_interval: u64) -> anyhow::Result<()>
     // Create Avahi manager
     let mut avahi = AvahiManager::new(&config.domain, &config.host_ip);
 
+    // Capture timestamp BEFORE scanning to avoid missing events during the scan.
+    // Any container that starts after this timestamp will be caught by the event stream.
+    let scan_start_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .ok();
+
     // Initial scan of running containers
     info!("Scanning existing containers...");
     match watcher.scan_containers().await {
@@ -97,9 +104,9 @@ async fn run_service(config: Config, health_interval: u64) -> anyhow::Result<()>
         avahi.active_count()
     );
 
-    // Start watching for events
+    // Start watching for events (from scan_start_time to catch any we might have missed)
     info!("Watching for Docker events...");
-    watch_loop(&watcher, &mut avahi, health_interval).await
+    watch_loop(&watcher, &mut avahi, health_interval, scan_start_time).await
 }
 
 /// Wait for Docker to become available with exponential backoff
@@ -136,6 +143,7 @@ async fn watch_loop(
     watcher: &ContainerWatcher,
     avahi: &mut AvahiManager,
     health_interval: u64,
+    since: Option<i64>,
 ) -> anyhow::Result<()> {
     // Set up signal handlers
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -145,8 +153,9 @@ async fn watch_loop(
     let mut health_timer = interval(Duration::from_secs(health_interval));
     health_timer.tick().await; // Skip first immediate tick
 
-    // Get event stream
-    let mut events = watcher.watch_events().await.boxed();
+    // Get event stream starting from the timestamp captured before scanning.
+    // This ensures we don't miss any container start events that occurred during the scan.
+    let mut events = watcher.watch_events(since).await.boxed();
 
     loop {
         tokio::select! {
@@ -172,8 +181,8 @@ async fn watch_loop(
                     Err(e) => {
                         error!("Docker event stream error: {}. Reconnecting...", e);
                         sleep(Duration::from_secs(5)).await;
-                        // Get new event stream
-                        events = watcher.watch_events().await.boxed();
+                        // Get new event stream (None = from now, no replay needed)
+                        events = watcher.watch_events(None).await.boxed();
                     }
                 }
             }
