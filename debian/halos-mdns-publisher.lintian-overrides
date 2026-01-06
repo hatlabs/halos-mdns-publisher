@@ -6,3 +6,6 @@ halos-mdns-publisher: no-manual-page [usr/bin/halos-mdns-publisher]
 # (not using full debhelper integration)
 halos-mdns-publisher: maintainer-script-calls-systemctl
 halos-mdns-publisher: maintainer-script-has-unexpanded-debhelper-token
+
+# Not uploading to official Debian repos, no ITP bug required
+halos-mdns-publisher: initial-upload-closes-no-bugs
