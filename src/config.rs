@@ -48,7 +48,11 @@ fn get_domain() -> Result<String> {
 }
 
 /// Get the host IP address from the default route
-fn get_host_ip() -> Result<String> {
+///
+/// Uses `ip route get 1.1.1.1` to determine the source IP for the default route.
+/// This is more reliable than listing interfaces as it handles multiple interfaces
+/// and complex routing configurations.
+pub fn get_host_ip() -> Result<String> {
     // Use `ip route get 1.1.1.1` to find the source IP for the default route
     let output = Command::new("ip")
         .args(["route", "get", "1.1.1.1"])

@@ -15,6 +15,10 @@ pub enum PublisherError {
 
     #[error("Failed to get host IP: {0}")]
     HostIp(String),
+
+    #[cfg(target_os = "linux")]
+    #[error("Netlink error: {0}")]
+    Netlink(#[from] rtnetlink::Error),
 }
 
 pub type Result<T> = std::result::Result<T, PublisherError>;

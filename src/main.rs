@@ -8,6 +8,7 @@ mod avahi_manager;
 mod config;
 mod container_watcher;
 mod error;
+mod ip_monitor;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,9 +20,10 @@ use tracing::{debug, error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::avahi_manager::AvahiManager;
-use crate::config::Config;
+use crate::config::{get_host_ip, Config};
 use crate::container_watcher::{ContainerEvent, ContainerWatcher};
 use crate::error::Result;
+use crate::ip_monitor::{start_ip_monitor, IpChangeEvent};
 
 #[derive(Parser)]
 #[command(name = "halos-mdns-publisher")]
@@ -71,6 +73,9 @@ async fn run_service(config: Config, health_interval: u64) -> anyhow::Result<()>
     // Create Avahi manager
     let mut avahi = AvahiManager::new(&config.domain, &config.host_ip);
 
+    // Start IP address change monitor
+    let ip_receiver = start_ip_monitor(config.host_ip.clone()).await?;
+
     // Capture timestamp BEFORE scanning to avoid missing events during the scan.
     // Any container that starts after this timestamp will be caught by the event stream.
     let scan_start_time = SystemTime::now()
@@ -106,7 +111,14 @@ async fn run_service(config: Config, health_interval: u64) -> anyhow::Result<()>
 
     // Start watching for events (from scan_start_time to catch any we might have missed)
     info!("Watching for Docker events...");
-    watch_loop(&watcher, &mut avahi, health_interval, scan_start_time).await
+    watch_loop(
+        &watcher,
+        &mut avahi,
+        health_interval,
+        scan_start_time,
+        ip_receiver,
+    )
+    .await
 }
 
 /// Wait for Docker to become available with exponential backoff
@@ -138,16 +150,18 @@ async fn wait_for_docker(config: &Config) -> Result<ContainerWatcher> {
     }
 }
 
-/// Main watch loop handling Docker events and health checks
+/// Main watch loop handling Docker events, IP changes, and health checks
 async fn watch_loop(
     watcher: &ContainerWatcher,
     avahi: &mut AvahiManager,
     health_interval: u64,
     since: Option<i64>,
+    mut ip_receiver: tokio::sync::mpsc::UnboundedReceiver<IpChangeEvent>,
 ) -> anyhow::Result<()> {
     // Set up signal handlers
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sighup = signal(SignalKind::hangup())?;
 
     // Health check timer
     let mut health_timer = interval(Duration::from_secs(health_interval));
@@ -167,6 +181,21 @@ async fn watch_loop(
             _ = sigint.recv() => {
                 info!("Received SIGINT, shutting down...");
                 break;
+            }
+
+            // Handle SIGHUP for manual IP refresh
+            _ = sighup.recv() => {
+                info!("Received SIGHUP, refreshing IP address...");
+                handle_ip_refresh(avahi).await;
+            }
+
+            // Handle IP address changes from netlink monitor
+            Some(event) = ip_receiver.recv() => {
+                info!(
+                    "IP address changed: {} -> {}",
+                    event.old_ip, event.new_ip
+                );
+                avahi.update_ip(&event.new_ip).await;
             }
 
             // Handle Docker events
@@ -203,6 +232,24 @@ async fn watch_loop(
     info!("Shutdown complete");
 
     Ok(())
+}
+
+/// Handle manual IP refresh triggered by SIGHUP
+async fn handle_ip_refresh(avahi: &mut AvahiManager) {
+    match get_host_ip() {
+        Ok(new_ip) => {
+            let current_ip = avahi.host_ip();
+            if new_ip != current_ip {
+                info!("Manual refresh: IP changed {} -> {}", current_ip, new_ip);
+                avahi.update_ip(&new_ip).await;
+            } else {
+                info!("Manual refresh: IP unchanged ({})", current_ip);
+            }
+        }
+        Err(e) => {
+            error!("Failed to get host IP during manual refresh: {}", e);
+        }
+    }
 }
 
 /// Handle a container event

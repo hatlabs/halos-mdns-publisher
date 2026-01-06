@@ -217,6 +217,57 @@ impl AvahiManager {
         self.processes.len()
     }
 
+    /// Get the current host IP being advertised
+    pub fn host_ip(&self) -> &str {
+        &self.host_ip
+    }
+
+    /// Update the host IP address and restart all active publications
+    ///
+    /// This should be called when the host's IP address changes.
+    /// All avahi-publish processes will be restarted with the new IP.
+    pub async fn update_ip(&mut self, new_ip: &str) {
+        if self.host_ip == new_ip {
+            debug!("IP unchanged ({}), skipping update", new_ip);
+            return;
+        }
+
+        info!(
+            "Updating host IP from {} to {}, restarting {} publication(s)",
+            self.host_ip,
+            new_ip,
+            self.processes.len()
+        );
+
+        let old_ip = std::mem::replace(&mut self.host_ip, new_ip.to_string());
+
+        // Collect container IDs and subdomains to republish
+        let to_republish: Vec<(String, String)> = self
+            .processes
+            .iter()
+            .map(|(id, process)| (id.clone(), process.subdomain.clone()))
+            .collect();
+
+        // Stop all existing processes
+        for (container_id, _) in &to_republish {
+            self.unpublish(container_id).await;
+        }
+
+        // Restart all with new IP
+        for (container_id, subdomain) in &to_republish {
+            if let Err(e) = self.publish(container_id, subdomain).await {
+                error!("Failed to republish {} after IP change: {}", subdomain, e);
+            }
+        }
+
+        info!(
+            "IP update complete: {} -> {}, {} publication(s) restarted",
+            old_ip,
+            self.host_ip,
+            self.processes.len()
+        );
+    }
+
     /// Verify that a published record is resolvable.
     ///
     /// Waits for mDNS probing to complete, then tests resolution.
@@ -472,5 +523,20 @@ mod tests {
         assert!(!is_valid_dns_label("app_name"));
         assert!(!is_valid_dns_label("app name"));
         assert!(!is_valid_dns_label("app@name"));
+    }
+
+    #[test]
+    fn test_host_ip_getter() {
+        let manager = AvahiManager::new("test.local", "192.168.1.100");
+        assert_eq!(manager.host_ip(), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_host_ip_getter_different_values() {
+        let manager1 = AvahiManager::new("test.local", "10.0.0.1");
+        let manager2 = AvahiManager::new("test.local", "172.16.0.1");
+
+        assert_eq!(manager1.host_ip(), "10.0.0.1");
+        assert_eq!(manager2.host_ip(), "172.16.0.1");
     }
 }
