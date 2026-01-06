@@ -3,25 +3,23 @@
 //! Monitors the system's network interfaces for IP address changes using
 //! the Linux netlink protocol. This allows detecting DHCP renewals,
 //! network reconfigurations, and other IP changes without polling.
-//!
-//! On non-Linux platforms, this module provides a no-op implementation
-//! that never emits events (useful for development/testing on macOS).
 
-#[cfg(target_os = "linux")]
 use std::time::Duration;
 
+use futures_util::StreamExt;
+use netlink_packet_core::NetlinkPayload;
+use netlink_packet_route::RouteNetlinkMessage;
+use netlink_sys::{AsyncSocket, SocketAddr};
+use rtnetlink::constants::RTMGRP_IPV4_IFADDR;
+use rtnetlink::new_connection;
 use tokio::sync::mpsc;
-#[cfg(target_os = "linux")]
 use tokio::time::sleep;
-#[cfg(not(target_os = "linux"))]
-use tracing::warn;
-#[cfg(target_os = "linux")]
 use tracing::{debug, error, info, warn};
 
+use crate::config::get_host_ip;
 use crate::error::Result;
 
 /// Debounce duration for IP changes (handles rapid changes during DHCP negotiation)
-#[cfg(target_os = "linux")]
 const IP_CHANGE_DEBOUNCE_MS: u64 = 2000;
 
 /// Event indicating the host IP has changed
@@ -37,37 +35,22 @@ pub struct IpChangeEvent {
 ///
 /// Returns a receiver that yields `IpChangeEvent` when the host's primary IP changes.
 /// The monitor runs as a background task and handles debouncing internally.
-///
-/// On non-Linux platforms, this returns a receiver that never yields events.
 pub async fn start_ip_monitor(
     initial_ip: String,
 ) -> Result<mpsc::UnboundedReceiver<IpChangeEvent>> {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    #[cfg(target_os = "linux")]
-    {
-        tokio::spawn(async move {
-            if let Err(e) = run_ip_monitor_linux(initial_ip, tx).await {
-                error!("IP monitor task failed: {}", e);
-            }
-        });
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        // On non-Linux platforms, just log that IP monitoring is not available
-        // but keep the receiver so the code compiles
-        let _ = initial_ip;
-        let _ = tx;
-        warn!("IP address monitoring is only available on Linux");
-    }
+    tokio::spawn(async move {
+        if let Err(e) = run_ip_monitor(initial_ip, tx).await {
+            error!("IP monitor task failed: {}", e);
+        }
+    });
 
     Ok(rx)
 }
 
-/// Linux implementation: main loop with reconnection logic
-#[cfg(target_os = "linux")]
-async fn run_ip_monitor_linux(
+/// Main loop with reconnection logic
+async fn run_ip_monitor(
     initial_ip: String,
     tx: mpsc::UnboundedSender<IpChangeEvent>,
 ) -> Result<()> {
@@ -89,20 +72,11 @@ async fn run_ip_monitor_linux(
     }
 }
 
-/// Linux implementation: monitor netlink events for address changes
-#[cfg(target_os = "linux")]
+/// Monitor netlink events for address changes
 async fn monitor_netlink_events(
     current_ip: &mut String,
     tx: &mpsc::UnboundedSender<IpChangeEvent>,
 ) -> Result<()> {
-    use crate::config::get_host_ip;
-    use futures_util::StreamExt;
-    use netlink_packet_core::NetlinkPayload;
-    use netlink_packet_route::RouteNetlinkMessage;
-    use netlink_sys::{AsyncSocket, SocketAddr};
-    use rtnetlink::constants::RTMGRP_IPV4_IFADDR;
-    use rtnetlink::new_connection;
-
     // Create connection to receive address change notifications
     let (mut conn, _handle, mut messages) = new_connection()?;
 

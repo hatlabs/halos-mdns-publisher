@@ -31,8 +31,7 @@ clap = { version = "4", features = ["derive"] }
 # System info
 gethostname = "1.0"
 
-# Netlink for IP address monitoring (Linux only)
-[target.'cfg(target_os = "linux")'.dependencies]
+# Netlink for IP address monitoring
 rtnetlink = "0.20"
 netlink-packet-core = "0.8"
 netlink-packet-route = "0.28"

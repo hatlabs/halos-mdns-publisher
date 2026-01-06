@@ -18,50 +18,77 @@ if [[ $0 != $PROJECT_ROOT && $PROJECT_ROOT != "" ]]; then
 fi
 readonly PROJECT_ROOT=$(pwd)
 
+# Docker image for Linux builds
+DOCKER_IMAGE="rust-debtools:latest"
+
+# Helper function to run cargo commands in Docker
+function docker-cargo {
+  docker run --rm \
+    -v "$(pwd):/build" \
+    -w /build \
+    "$DOCKER_IMAGE" \
+    "$@"
+}
+
+# Helper function to ensure Docker image exists
+function ensure-docker-image {
+  if ! docker image inspect "$DOCKER_IMAGE" &>/dev/null; then
+    echo "🐳 Building Docker image for Linux builds..."
+    docker build -t "$DOCKER_IMAGE" -f docker/Dockerfile.debtools docker/
+    echo "✅ Docker image built"
+  fi
+}
+
 ################################################################################
-# Rust Development Commands
+# Rust Development Commands (all run in Docker for Linux compatibility)
 
 function build {
-  #@ Build Rust binary (debug mode)
+  #@ Build Rust binary (debug mode, x86_64 Linux)
   #@ Category: Build
-  echo "🔨 Building halos-mdns-publisher (debug)..."
-  cargo build
+  ensure-docker-image
+  echo "🔨 Building halos-mdns-publisher (debug, x86_64 Linux)..."
+  docker-cargo cargo build
   echo "✅ Build complete: target/debug/halos-mdns-publisher"
 }
 
 function build-release {
-  #@ Build Rust binary (release mode)
+  #@ Build Rust binary (release mode, x86_64 Linux)
   #@ Category: Build
-  echo "🔨 Building halos-mdns-publisher (release)..."
-  cargo build --release
+  ensure-docker-image
+  echo "🔨 Building halos-mdns-publisher (release, x86_64 Linux)..."
+  docker-cargo cargo build --release
   echo "✅ Build complete: target/release/halos-mdns-publisher"
 }
 
 function test {
-  #@ Run all tests
+  #@ Run all tests (in Docker)
   #@ Category: Test
+  ensure-docker-image
   echo "🧪 Running tests..."
-  cargo test
+  docker-cargo cargo test
 }
 
 function check {
-  #@ Run cargo check (fast compile check)
+  #@ Run cargo check (fast compile check, in Docker)
   #@ Category: Test
+  ensure-docker-image
   echo "🔍 Running cargo check..."
-  cargo check
+  docker-cargo cargo check
 }
 
 function clippy {
-  #@ Run clippy linter
+  #@ Run clippy linter (in Docker)
   #@ Category: Test
+  ensure-docker-image
   echo "📎 Running clippy..."
-  cargo clippy --all-targets --all-features -- -D warnings
+  docker-cargo cargo clippy --all-targets --all-features -- -D warnings
 }
 
 function fmt {
   #@ Format code with rustfmt
   #@ Category: Test
   echo "🎨 Formatting code..."
+  # rustfmt can run natively - it doesn't need Linux-specific dependencies
   cargo fmt
 }
 
@@ -69,11 +96,12 @@ function fmt-check {
   #@ Check code formatting
   #@ Category: Test
   echo "🔍 Checking code format..."
+  # rustfmt can run natively - it doesn't need Linux-specific dependencies
   cargo fmt --check
 }
 
 function lint {
-  #@ Run all linting (fmt check + clippy)
+  #@ Run all linting (fmt check + clippy in Docker)
   #@ Category: Test
   fmt-check
   clippy
@@ -99,7 +127,7 @@ function check-lintian {
     exit 1
   fi
   echo "🔍 Running lintian on $deb_file..."
-  docker run --rm -v "$(pwd):/build" -w /build rust-debtools:latest \
+  docker run --rm -v "$(pwd):/build" -w /build "$DOCKER_IMAGE" \
     lintian --info --display-info --fail-on error,warning "$deb_file"
   echo "✅ Lintian check passed"
 }
@@ -171,6 +199,8 @@ function help {
   #@ Category: Help
   echo "HaLOS mDNS Publisher - Development Commands"
   echo "============================================"
+  echo ""
+  echo "NOTE: This is a Linux-only project. Build/test commands run in Docker."
   echo ""
   echo "Available commands:"
   echo ""

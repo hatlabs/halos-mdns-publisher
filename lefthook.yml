@@ -1,22 +1,27 @@
 # Lefthook configuration for halos-mdns-publisher
 # Install with: lefthook install
+#
+# NOTE: This is a Linux-only project. Cargo commands run in Docker.
 
 pre-commit:
   parallel: true
   commands:
     cargo-fmt:
       glob: "*.rs"
+      # rustfmt can run natively - no Linux-specific dependencies
       run: cargo fmt --check
       fail_text: "Rust formatting check failed. Run 'cargo fmt' to fix."
 
     cargo-clippy:
       glob: "*.rs"
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      # Must run in Docker due to Linux-only dependencies
+      run: ./run clippy
       fail_text: "Clippy found issues. Fix the warnings above."
 
     cargo-test:
       glob: "*.rs"
-      run: cargo test --quiet
+      # Must run in Docker due to Linux-only dependencies
+      run: ./run test
       fail_text: "Tests failed. Fix the failing tests above."
 
     check-hostnames:

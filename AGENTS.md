@@ -4,6 +4,12 @@
 
 Native systemd service (Rust) that advertises container subdomains via Avahi/mDNS. Monitors Docker containers for the `halos.subdomain` label and dynamically publishes/removes mDNS records.
 
+## ⚠️ Linux-Only Project
+
+**IMPORTANT**: This is a Linux-only project. It uses Linux-specific APIs (netlink) that do not exist on macOS or Windows.
+
+**All builds and tests MUST be performed in Docker containers.** The `./run` script commands automatically use Docker for compilation and testing. Never attempt native builds on macOS - they will fail.
+
 ## Key Files
 
 - `src/main.rs` - Entry point, CLI, signal handling, main service loop
