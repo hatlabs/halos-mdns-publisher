@@ -88,9 +88,18 @@ docker run --rm \
             chmod 644 "$PKG_DIR/usr/share/lintian/overrides/${PACKAGE_NAME}"
         fi
 
-        # Create changelog.gz (use -n for reproducible builds)
+        # Create changelog file (use -n for reproducible builds)
+        # Debian policy:
+        # - Native packages (version without dash, e.g., "1.0") use changelog.gz
+        # - Non-native packages (version with dash, e.g., "1.0-1") use changelog.Debian.gz
         if [ -f debian/changelog ]; then
-            gzip -9 -n -c debian/changelog > "$PKG_DIR/usr/share/doc/${PACKAGE_NAME}/changelog.gz"
+            if [[ "$DEB_VERSION" == *-* ]]; then
+                # Non-native package (has revision number)
+                gzip -9 -n -c debian/changelog > "$PKG_DIR/usr/share/doc/${PACKAGE_NAME}/changelog.Debian.gz"
+            else
+                # Native package (no revision number)
+                gzip -9 -n -c debian/changelog > "$PKG_DIR/usr/share/doc/${PACKAGE_NAME}/changelog.gz"
+            fi
         fi
 
         # Copy copyright file
