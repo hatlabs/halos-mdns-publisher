@@ -60,8 +60,63 @@ pub fn is_publishable_ip(ip: &Ipv4Addr) -> bool {
 /// Filters out loopback, link-local, and Docker bridge interfaces.
 #[allow(dead_code)] // TODO: remove when integrated into main.rs
 pub fn get_host_ips() -> Result<Vec<HostIp>> {
-    // TODO: implement using rtnetlink
-    Ok(vec![])
+    // Use `ip -j addr show` to get JSON output of all interfaces
+    let output = Command::new("ip")
+        .args(["-j", "addr", "show"])
+        .output()
+        .map_err(|e| PublisherError::HostIp(format!("Failed to run ip addr: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(PublisherError::HostIp("ip addr command failed".to_string()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Parse JSON output
+    // Format: [{"ifname": "eth0", "addr_info": [{"local": "192.168.1.1", "family": "inet", ...}]}]
+    let interfaces: Vec<serde_json::Value> = serde_json::from_str(&stdout)
+        .map_err(|e| PublisherError::HostIp(format!("Failed to parse ip addr output: {}", e)))?;
+
+    let mut host_ips = Vec::new();
+
+    for iface in interfaces {
+        let ifname = iface["ifname"].as_str().unwrap_or("");
+
+        // Skip non-publishable interfaces
+        if !is_publishable_interface(ifname) {
+            continue;
+        }
+
+        // Get IPv4 addresses from addr_info
+        if let Some(addr_info) = iface["addr_info"].as_array() {
+            for addr in addr_info {
+                // Only process IPv4 addresses
+                if addr["family"].as_str() != Some("inet") {
+                    continue;
+                }
+
+                if let Some(ip_str) = addr["local"].as_str() {
+                    // Parse and validate IP
+                    if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
+                        if is_publishable_ip(&ip) {
+                            host_ips.push(HostIp {
+                                ip: ip_str.to_string(),
+                                interface: ifname.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if host_ips.is_empty() {
+        return Err(PublisherError::HostIp(
+            "No publishable IP addresses found".to_string(),
+        ));
+    }
+
+    Ok(host_ips)
 }
 
 /// Runtime configuration for the mDNS publisher

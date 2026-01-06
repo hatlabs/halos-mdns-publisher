@@ -48,6 +48,7 @@ const VERIFICATION_DELAY_MS: u64 = 1500;
 const VERIFICATION_TIMEOUT_MS: u64 = 2000;
 
 /// Maximum number of retry attempts when verification fails.
+#[allow(dead_code)] // TODO: integrate verification into publish flow
 const MAX_VERIFICATION_RETRIES: u32 = 3;
 
 /// Validate a subdomain as a valid DNS label.
@@ -77,7 +78,8 @@ pub struct AvahiManager {
     /// Host IP addresses to advertise (multi-IP support)
     host_ips_vec: Vec<HostIp>,
     /// Active avahi-publish processes keyed by container ID
-    processes: HashMap<String, AvahiProcess>,
+    /// Each container can have multiple processes (one per IP)
+    processes: HashMap<String, Vec<AvahiProcess>>,
 }
 
 /// Tracks an active avahi-publish process
@@ -90,6 +92,8 @@ struct AvahiProcess {
     fqdn: String,
     /// The subdomain (for logging)
     subdomain: String,
+    /// The IP address this process publishes
+    ip: String,
 }
 
 impl AvahiManager {
@@ -129,6 +133,7 @@ impl AvahiManager {
 
     /// Publish a subdomain for a container
     ///
+    /// Spawns one avahi-publish process per configured IP address.
     /// If already publishing for this container, does nothing.
     /// Returns Ok(()) if the subdomain is invalid (with a warning logged).
     pub async fn publish(&mut self, container_id: &str, subdomain: &str) -> Result<()> {
@@ -148,108 +153,150 @@ impl AvahiManager {
             return Ok(());
         }
 
-        // Check if already publishing for this container
-        if let Some(existing) = self.processes.get(container_id) {
-            if existing.subdomain == subdomain {
-                debug!(
-                    "Already publishing {} for container {}",
-                    existing.fqdn,
-                    &container_id[..12.min(container_id.len())]
+        // Check if already publishing for this container with the same subdomain
+        if let Some(existing_processes) = self.processes.get(container_id) {
+            if let Some(first) = existing_processes.first() {
+                if first.subdomain == subdomain {
+                    debug!(
+                        "Already publishing {} for container {}",
+                        first.fqdn,
+                        &container_id[..12.min(container_id.len())]
+                    );
+                    return Ok(());
+                }
+                // Different subdomain, stop old ones first
+                warn!(
+                    "Container {} changed subdomain from {} to {}, restarting",
+                    &container_id[..12.min(container_id.len())],
+                    first.subdomain,
+                    subdomain
                 );
-                return Ok(());
             }
-            // Different subdomain, stop old one first
-            warn!(
-                "Container {} changed subdomain from {} to {}, restarting",
-                &container_id[..12.min(container_id.len())],
-                existing.subdomain,
-                subdomain
-            );
             self.unpublish(container_id).await;
         }
 
         let fqdn = format!("{}.{}", subdomain, self.domain);
+        let ips_to_publish: Vec<String> = self.host_ips_vec.iter().map(|h| h.ip.clone()).collect();
 
-        // Retry loop for verification failures
-        for retry_count in 0..=MAX_VERIFICATION_RETRIES {
-            if retry_count > 0 {
-                info!(
-                    "Publishing {} -> {} (retry {}/{})",
-                    fqdn, self.host_ip, retry_count, MAX_VERIFICATION_RETRIES
-                );
-            } else {
-                info!("Publishing {} -> {}", fqdn, self.host_ip);
-            }
+        if ips_to_publish.is_empty() {
+            warn!("No IP addresses configured, skipping publish for {}", fqdn);
+            return Ok(());
+        }
 
-            // Spawn avahi-publish-address process with --no-reverse to avoid
-            // "Local name collision" errors when publishing subdomains of the host's domain
-            let mut child = Command::new("avahi-publish-address")
-                .args(["--no-reverse", &fqdn, &self.host_ip])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .spawn()?;
+        info!(
+            "Publishing {} -> {} IP(s): {:?}",
+            fqdn,
+            ips_to_publish.len(),
+            ips_to_publish
+        );
 
-            // Take stderr handle so we can read it later if the process fails
-            let stderr = child.stderr.take();
+        let mut spawned_processes = Vec::new();
+        let mut any_succeeded = false;
 
-            let process = AvahiProcess {
-                child,
-                stderr,
-                fqdn: fqdn.clone(),
-                subdomain: subdomain.to_string(),
-            };
-
-            self.processes.insert(container_id.to_string(), process);
-
-            info!(
-                "Started avahi-publish for {} (container {})",
-                fqdn,
-                &container_id[..12.min(container_id.len())]
-            );
-
-            // Verify that the record is actually resolvable
-            let verified = self.verify_publication(container_id, &fqdn).await;
-
-            if verified {
-                return Ok(());
-            }
-
-            // If verification failed and we have retries left, loop will continue
-            // (verify_publication already called unpublish on failure)
-            if retry_count < MAX_VERIFICATION_RETRIES {
-                warn!(
-                    "Verification failed for {}, retrying ({}/{})",
-                    fqdn,
-                    retry_count + 1,
-                    MAX_VERIFICATION_RETRIES
-                );
+        // Spawn one avahi-publish process per IP
+        for ip in &ips_to_publish {
+            match self.spawn_avahi_publish(&fqdn, subdomain, ip).await {
+                Ok(process) => {
+                    spawned_processes.push(process);
+                    any_succeeded = true;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to spawn avahi-publish for {} -> {}: {}",
+                        fqdn, ip, e
+                    );
+                }
             }
         }
 
-        error!(
-            "Failed to publish {} after {} retries, giving up",
-            fqdn, MAX_VERIFICATION_RETRIES
+        if spawned_processes.is_empty() {
+            error!("Failed to spawn any avahi-publish processes for {}", fqdn);
+            return Ok(());
+        }
+
+        // Store all spawned processes
+        self.processes
+            .insert(container_id.to_string(), spawned_processes);
+
+        info!(
+            "Started {} avahi-publish process(es) for {} (container {})",
+            self.processes
+                .get(container_id)
+                .map(|p| p.len())
+                .unwrap_or(0),
+            fqdn,
+            &container_id[..12.min(container_id.len())]
         );
+
+        // Verify that at least one record is resolvable (after a delay for mDNS probing)
+        if any_succeeded {
+            tokio::time::sleep(Duration::from_millis(VERIFICATION_DELAY_MS)).await;
+            match Self::test_resolution(&fqdn).await {
+                Ok(resolved_ip) => {
+                    info!("Verified: {} resolves to {}", fqdn, resolved_ip);
+                }
+                Err(e) => {
+                    warn!(
+                        "Resolution verification failed for {} (may still work): {}",
+                        fqdn, e
+                    );
+                }
+            }
+        }
 
         Ok(())
     }
 
+    /// Spawn a single avahi-publish-address process
+    async fn spawn_avahi_publish(
+        &self,
+        fqdn: &str,
+        subdomain: &str,
+        ip: &str,
+    ) -> Result<AvahiProcess> {
+        debug!("Spawning avahi-publish for {} -> {}", fqdn, ip);
+
+        let mut child = Command::new("avahi-publish-address")
+            .args(["--no-reverse", fqdn, ip])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        let stderr = child.stderr.take();
+
+        Ok(AvahiProcess {
+            child,
+            stderr,
+            fqdn: fqdn.to_string(),
+            subdomain: subdomain.to_string(),
+            ip: ip.to_string(),
+        })
+    }
+
     /// Stop publishing for a container
     pub async fn unpublish(&mut self, container_id: &str) {
-        if let Some(mut process) = self.processes.remove(container_id) {
+        if let Some(processes) = self.processes.remove(container_id) {
+            let count = processes.len();
+            let fqdn = processes
+                .first()
+                .map(|p| p.fqdn.clone())
+                .unwrap_or_default();
+
             info!(
-                "Stopping avahi-publish for {} (container {})",
-                process.fqdn,
+                "Stopping {} avahi-publish process(es) for {} (container {})",
+                count,
+                fqdn,
                 &container_id[..12.min(container_id.len())]
             );
 
-            if let Err(e) = process.child.kill().await {
-                // Process may have already exited
-                debug!("Error killing avahi-publish process: {}", e);
+            for mut process in processes {
+                if let Err(e) = process.child.kill().await {
+                    // Process may have already exited
+                    debug!("Error killing avahi-publish process: {}", e);
+                }
+                // Wait for process to fully exit
+                let _ = process.child.wait().await;
             }
-
-            // Wait for process to fully exit
-            let _ = process.child.wait().await;
         }
     }
 
@@ -267,9 +314,15 @@ impl AvahiManager {
         }
     }
 
-    /// Get count of active publications
+    /// Get count of active publications (containers being published)
     pub fn active_count(&self) -> usize {
         self.processes.len()
+    }
+
+    /// Get total count of avahi-publish processes
+    #[allow(dead_code)]
+    pub fn process_count(&self) -> usize {
+        self.processes.values().map(|v| v.len()).sum()
     }
 
     /// Get the current host IP being advertised
@@ -296,11 +349,19 @@ impl AvahiManager {
 
         let old_ip = std::mem::replace(&mut self.host_ip, new_ip.to_string());
 
+        // Also update the host_ips_vec with the new single IP
+        self.host_ips_vec = vec![HostIp {
+            ip: new_ip.to_string(),
+            interface: "default".to_string(),
+        }];
+
         // Collect container IDs and subdomains to republish
         let to_republish: Vec<(String, String)> = self
             .processes
             .iter()
-            .map(|(id, process)| (id.clone(), process.subdomain.clone()))
+            .filter_map(|(id, processes)| {
+                processes.first().map(|p| (id.clone(), p.subdomain.clone()))
+            })
             .collect();
 
         // Stop all existing processes
@@ -323,46 +384,112 @@ impl AvahiManager {
         );
     }
 
+    /// Update the set of host IP addresses and restart affected publications
+    ///
+    /// This should be called when the host's IP set changes (interface up/down).
+    #[allow(dead_code)] // TODO: remove when integrated into main.rs
+    pub async fn update_ips(&mut self, new_ips: Vec<HostIp>) {
+        let (added, removed) = compute_ip_diff(&self.host_ips_vec, &new_ips);
+
+        if added.is_empty() && removed.is_empty() {
+            debug!("IP set unchanged, skipping update");
+            return;
+        }
+
+        info!(
+            "Updating IP set: {} added, {} removed, restarting {} publication(s)",
+            added.len(),
+            removed.len(),
+            self.processes.len()
+        );
+
+        // Update stored IPs
+        self.host_ips_vec = new_ips;
+        if let Some(first) = self.host_ips_vec.first() {
+            self.host_ip = first.ip.clone();
+        }
+
+        // Collect container IDs and subdomains to republish
+        let to_republish: Vec<(String, String)> = self
+            .processes
+            .iter()
+            .filter_map(|(id, processes)| {
+                processes.first().map(|p| (id.clone(), p.subdomain.clone()))
+            })
+            .collect();
+
+        // Stop all existing processes
+        for (container_id, _) in &to_republish {
+            self.unpublish(container_id).await;
+        }
+
+        // Restart all with new IP set
+        for (container_id, subdomain) in &to_republish {
+            if let Err(e) = self.publish(container_id, subdomain).await {
+                error!(
+                    "Failed to republish {} after IP set change: {}",
+                    subdomain, e
+                );
+            }
+        }
+
+        info!(
+            "IP set update complete, {} publication(s) active",
+            self.processes.len()
+        );
+    }
+
     /// Verify that a published record is resolvable.
     ///
     /// Waits for mDNS probing to complete, then tests resolution.
     /// Returns true if verification succeeded, false otherwise.
-    /// On failure, the process is killed and removed to allow retry.
+    /// On failure, processes are killed and removed to allow retry.
+    #[allow(dead_code)] // TODO: integrate verification into publish flow
     async fn verify_publication(&mut self, container_id: &str, fqdn: &str) -> bool {
         // Wait for mDNS probing to complete
         tokio::time::sleep(Duration::from_millis(VERIFICATION_DELAY_MS)).await;
 
-        // Check if process is still running
-        let process_status = if let Some(process) = self.processes.get_mut(container_id) {
-            match process.child.try_wait() {
-                Ok(Some(status)) => Some(status),
-                Ok(None) => None, // Still running
-                Err(e) => {
-                    error!("Error checking avahi-publish status for {}: {}", fqdn, e);
-                    return false;
+        // Check if any process has died
+        let any_process_died = if let Some(processes) = self.processes.get_mut(container_id) {
+            let mut any_died = false;
+            for process in processes.iter_mut() {
+                match process.child.try_wait() {
+                    Ok(Some(status)) => {
+                        let stderr_output = Self::read_stderr(&mut process.stderr).await;
+                        error!(
+                            "avahi-publish for {} -> {} exited immediately with status: {}{}",
+                            fqdn,
+                            process.ip,
+                            status,
+                            if stderr_output.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\nstderr: {}", stderr_output)
+                            }
+                        );
+                        any_died = true;
+                    }
+                    Ok(None) => {
+                        // Still running
+                    }
+                    Err(e) => {
+                        error!(
+                            "Error checking avahi-publish status for {} -> {}: {}",
+                            fqdn, process.ip, e
+                        );
+                        any_died = true;
+                    }
                 }
             }
+            any_died
         } else {
-            // Process was removed (container stopped?)
+            // Processes were removed (container stopped?)
             return false;
         };
 
-        // If process exited early, remove it and log the error
-        if let Some(status) = process_status {
-            // Remove the dead process to prevent duplicate logging in check_health
-            if let Some(mut process) = self.processes.remove(container_id) {
-                let stderr_output = Self::read_stderr(&mut process.stderr).await;
-                error!(
-                    "avahi-publish for {} exited immediately with status: {}{}",
-                    fqdn,
-                    status,
-                    if stderr_output.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\nstderr: {}", stderr_output)
-                    }
-                );
-            }
+        // If any process exited early, remove all and fail verification
+        if any_process_died {
+            self.processes.remove(container_id);
             return false;
         }
 
@@ -375,33 +502,39 @@ impl AvahiManager {
             Err(e) => {
                 warn!("Resolution verification failed for {}: {}", fqdn, e);
 
-                // Check if the process is still running
-                let process_died = if let Some(process) = self.processes.get_mut(container_id) {
-                    matches!(process.child.try_wait(), Ok(Some(_)))
+                // Check if any process died while we were testing
+                let any_process_died = if let Some(processes) = self.processes.get_mut(container_id)
+                {
+                    processes
+                        .iter_mut()
+                        .any(|p| matches!(p.child.try_wait(), Ok(Some(_))))
                 } else {
-                    true // Process already removed
+                    true // Processes already removed
                 };
 
-                // If process died, remove it and log with stderr
-                if process_died {
-                    if let Some(mut process) = self.processes.remove(container_id) {
-                        let status = process.child.try_wait().ok().flatten();
-                        let stderr_output = Self::read_stderr(&mut process.stderr).await;
-                        error!(
-                            "avahi-publish for {} exited with status: {}{}",
-                            fqdn,
-                            status
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "unknown".to_string()),
-                            if stderr_output.is_empty() {
-                                String::new()
-                            } else {
-                                format!("\nstderr: {}", stderr_output)
+                if any_process_died {
+                    // Log and remove dead processes
+                    if let Some(mut processes) = self.processes.remove(container_id) {
+                        for process in processes.iter_mut() {
+                            let status = process.child.try_wait().ok().flatten();
+                            if let Some(status) = status {
+                                let stderr_output = Self::read_stderr(&mut process.stderr).await;
+                                error!(
+                                    "avahi-publish for {} -> {} exited with status: {}{}",
+                                    fqdn,
+                                    process.ip,
+                                    status,
+                                    if stderr_output.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\nstderr: {}", stderr_output)
+                                    }
+                                );
                             }
-                        );
+                        }
                     }
                 } else {
-                    // Process is running but not resolving - kill it to allow retry
+                    // Processes are running but not resolving - kill them to allow retry
                     warn!(
                         "avahi-publish for {} is running but not resolving, killing for retry",
                         fqdn
@@ -462,38 +595,53 @@ impl AvahiManager {
 
     /// Check health of all processes, restart any that have died
     pub async fn check_health(&mut self) -> Result<()> {
-        let mut dead_processes = Vec::new();
+        // Collect containers that need restarting (any process died)
+        let mut containers_to_restart = Vec::new();
 
-        for (container_id, process) in &mut self.processes {
-            // Try to check if process is still running
-            match process.child.try_wait() {
-                Ok(Some(status)) => {
-                    // Read stderr to understand why the process died
-                    let stderr_output = Self::read_stderr(&mut process.stderr).await;
-                    warn!(
-                        "avahi-publish for {} exited with status: {}{}",
-                        process.fqdn,
-                        status,
-                        if stderr_output.is_empty() {
-                            String::new()
-                        } else {
-                            format!("\nstderr: {}", stderr_output)
-                        }
-                    );
-                    dead_processes.push((container_id.clone(), process.subdomain.clone()));
+        for (container_id, processes) in &mut self.processes {
+            let mut any_dead = false;
+            let subdomain = processes.first().map(|p| p.subdomain.clone());
+
+            for process in processes.iter_mut() {
+                match process.child.try_wait() {
+                    Ok(Some(status)) => {
+                        // Read stderr to understand why the process died
+                        let stderr_output = Self::read_stderr(&mut process.stderr).await;
+                        warn!(
+                            "avahi-publish for {} -> {} exited with status: {}{}",
+                            process.fqdn,
+                            process.ip,
+                            status,
+                            if stderr_output.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\nstderr: {}", stderr_output)
+                            }
+                        );
+                        any_dead = true;
+                    }
+                    Ok(None) => {
+                        // Still running
+                        debug!(
+                            "avahi-publish for {} -> {} is healthy",
+                            process.fqdn, process.ip
+                        );
+                    }
+                    Err(e) => {
+                        error!("Error checking avahi-publish status: {}", e);
+                    }
                 }
-                Ok(None) => {
-                    // Still running
-                    debug!("avahi-publish for {} is healthy", process.fqdn);
-                }
-                Err(e) => {
-                    error!("Error checking avahi-publish status: {}", e);
+            }
+
+            if any_dead {
+                if let Some(subdomain) = subdomain {
+                    containers_to_restart.push((container_id.clone(), subdomain));
                 }
             }
         }
 
-        // Restart dead processes
-        for (container_id, subdomain) in dead_processes {
+        // Restart containers with dead processes
+        for (container_id, subdomain) in containers_to_restart {
             self.processes.remove(&container_id);
             info!("Restarting avahi-publish for {}.{}", subdomain, self.domain);
             if let Err(e) = self.publish(&container_id, &subdomain).await {
