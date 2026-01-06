@@ -128,7 +128,8 @@ pub struct Config {
     /// mDNS domain suffix (e.g., "myhostname.local")
     pub domain: String,
 
-    /// Host IP address to advertise
+    /// Host IP address to advertise (legacy single-IP mode)
+    #[allow(dead_code)] // Kept for backward compatibility; use get_host_ips() for multi-IP
     pub host_ip: String,
 
     /// Container label to look for

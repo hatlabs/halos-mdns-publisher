@@ -97,7 +97,8 @@ struct AvahiProcess {
 }
 
 impl AvahiManager {
-    /// Create a new Avahi manager
+    /// Create a new Avahi manager (single-IP mode, legacy)
+    #[allow(dead_code)] // Kept for single-IP backward compatibility
     pub fn new(domain: &str, host_ip: &str) -> Self {
         Self {
             domain: domain.to_string(),
@@ -114,7 +115,6 @@ impl AvahiManager {
     ///
     /// For each container subdomain, one avahi-publish process will be
     /// spawned per IP address.
-    #[allow(dead_code)] // TODO: remove when integrated into main.rs
     pub fn new_with_ips(domain: &str, host_ips: Vec<HostIp>) -> Self {
         let host_ip = host_ips.first().map(|ip| ip.ip.clone()).unwrap_or_default();
         Self {
@@ -325,7 +325,8 @@ impl AvahiManager {
         self.processes.values().map(|v| v.len()).sum()
     }
 
-    /// Get the current host IP being advertised
+    /// Get the current host IP being advertised (single-IP mode, legacy)
+    #[allow(dead_code)] // Kept for single-IP backward compatibility
     pub fn host_ip(&self) -> &str {
         &self.host_ip
     }
@@ -334,6 +335,7 @@ impl AvahiManager {
     ///
     /// This should be called when the host's IP address changes.
     /// All avahi-publish processes will be restarted with the new IP.
+    #[allow(dead_code)] // Kept for single-IP backward compatibility
     pub async fn update_ip(&mut self, new_ip: &str) {
         if self.host_ip == new_ip {
             debug!("IP unchanged ({}), skipping update", new_ip);

@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::avahi_manager::AvahiManager;
-use crate::config::{get_host_ip, Config};
+use crate::config::{get_host_ips, Config, HostIp};
 use crate::container_watcher::{ContainerEvent, ContainerWatcher};
 use crate::error::Result;
 use crate::ip_monitor::{start_ip_monitor, IpChangeEvent};
@@ -60,21 +60,32 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration
     let config = Config::new(Some(cli.socket))?;
     info!("Domain: {}", config.domain);
-    info!("Host IP: {}", config.host_ip);
+
+    // Get all host IPs from publishable interfaces
+    let host_ips = get_host_ips()?;
+    for ip in &host_ips {
+        info!("Host IP: {} ({})", ip.ip, ip.interface);
+    }
 
     // Run the main service loop
-    run_service(config, cli.health_interval).await
+    run_service(config, host_ips, cli.health_interval).await
 }
 
-async fn run_service(config: Config, health_interval: u64) -> anyhow::Result<()> {
+async fn run_service(
+    config: Config,
+    host_ips: Vec<HostIp>,
+    health_interval: u64,
+) -> anyhow::Result<()> {
     // Wait for Docker to be available with retry
     let watcher = wait_for_docker(&config).await?;
 
-    // Create Avahi manager
-    let mut avahi = AvahiManager::new(&config.domain, &config.host_ip);
+    // Create Avahi manager with all host IPs
+    let mut avahi = AvahiManager::new_with_ips(&config.domain, host_ips.clone());
 
-    // Start IP address change monitor
-    let ip_receiver = start_ip_monitor(config.host_ip.clone()).await?;
+    // Start IP address change monitor (uses primary IP for tracking)
+    // When changes are detected, we'll re-fetch all IPs
+    let primary_ip = host_ips.first().map(|ip| ip.ip.clone()).unwrap_or_default();
+    let ip_receiver = start_ip_monitor(primary_ip).await?;
 
     // Capture timestamp BEFORE scanning to avoid missing events during the scan.
     // Any container that starts after this timestamp will be caught by the event stream.
@@ -192,10 +203,10 @@ async fn watch_loop(
             // Handle IP address changes from netlink monitor
             Some(event) = ip_receiver.recv() => {
                 info!(
-                    "IP address changed: {} -> {}",
+                    "Network change detected (primary IP: {} -> {}), refreshing all IPs...",
                     event.old_ip, event.new_ip
                 );
-                avahi.update_ip(&event.new_ip).await;
+                handle_ip_change(avahi).await;
             }
 
             // Handle Docker events
@@ -234,20 +245,41 @@ async fn watch_loop(
     Ok(())
 }
 
+/// Handle IP address change detected by netlink monitor
+async fn handle_ip_change(avahi: &mut AvahiManager) {
+    match get_host_ips() {
+        Ok(new_ips) => {
+            for ip in &new_ips {
+                info!("  IP: {} ({})", ip.ip, ip.interface);
+            }
+            avahi.update_ips(new_ips).await;
+        }
+        Err(e) => {
+            error!("Failed to get host IPs after network change: {}", e);
+        }
+    }
+}
+
 /// Handle manual IP refresh triggered by SIGHUP
 async fn handle_ip_refresh(avahi: &mut AvahiManager) {
-    match get_host_ip() {
-        Ok(new_ip) => {
-            let current_ip = avahi.host_ip();
-            if new_ip != current_ip {
-                info!("Manual refresh: IP changed {} -> {}", current_ip, new_ip);
-                avahi.update_ip(&new_ip).await;
+    match get_host_ips() {
+        Ok(new_ips) => {
+            let current_ips = avahi.host_ips();
+            if new_ips != current_ips {
+                info!("Manual refresh: IPs changed");
+                for ip in &new_ips {
+                    info!("  IP: {} ({})", ip.ip, ip.interface);
+                }
+                avahi.update_ips(new_ips).await;
             } else {
-                info!("Manual refresh: IP unchanged ({})", current_ip);
+                info!(
+                    "Manual refresh: IPs unchanged ({} interface(s))",
+                    current_ips.len()
+                );
             }
         }
         Err(e) => {
-            error!("Failed to get host IP during manual refresh: {}", e);
+            error!("Failed to get host IPs during manual refresh: {}", e);
         }
     }
 }
