@@ -159,23 +159,31 @@ async fn monitor_netlink_events(
             // Get the new primary IP
             match get_host_ip() {
                 Ok(new_ip) => {
-                    if new_ip != *current_ip {
-                        info!("IP address changed: {} -> {}", current_ip, new_ip);
-
-                        let event = IpChangeEvent {
-                            old_ip: current_ip.clone(),
-                            new_ip: new_ip.clone(),
-                        };
-
-                        *current_ip = new_ip;
-
-                        if tx.send(event).is_err() {
-                            // Receiver dropped, exit monitor
-                            info!("IP monitor receiver dropped, exiting");
-                            return Ok(());
-                        }
+                    // Always send an event on any address change, even if primary IP unchanged.
+                    // This ensures multi-IP mode can detect secondary interface changes.
+                    let primary_changed = new_ip != *current_ip;
+                    if primary_changed {
+                        info!("Primary IP changed: {} -> {}", current_ip, new_ip);
                     } else {
-                        debug!("Address event but primary IP unchanged: {}", current_ip);
+                        info!(
+                            "Network change detected (primary IP unchanged: {})",
+                            current_ip
+                        );
+                    }
+
+                    let event = IpChangeEvent {
+                        old_ip: current_ip.clone(),
+                        new_ip: new_ip.clone(),
+                    };
+
+                    if primary_changed {
+                        *current_ip = new_ip;
+                    }
+
+                    if tx.send(event).is_err() {
+                        // Receiver dropped, exit monitor
+                        info!("IP monitor receiver dropped, exiting");
+                        return Ok(());
                     }
                 }
                 Err(e) => {
