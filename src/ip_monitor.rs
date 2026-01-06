@@ -16,7 +16,7 @@ use tokio::time::sleep;
 #[cfg(not(target_os = "linux"))]
 use tracing::warn;
 #[cfg(target_os = "linux")]
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::error::Result;
 
@@ -65,21 +65,12 @@ pub async fn start_ip_monitor(
     Ok(rx)
 }
 
-// Linux implementation using netlink
+/// Linux implementation: main loop with reconnection logic
 #[cfg(target_os = "linux")]
 async fn run_ip_monitor_linux(
     initial_ip: String,
     tx: mpsc::UnboundedSender<IpChangeEvent>,
 ) -> Result<()> {
-    use crate::config::get_host_ip;
-    use futures_util::StreamExt;
-    use netlink_packet_core::NetlinkPayload;
-    use netlink_packet_route::RouteNetlinkMessage;
-    use netlink_sys::{AsyncSocket, SocketAddr};
-    use rtnetlink::constants::RTMGRP_IPV4_IFADDR;
-    use rtnetlink::new_connection;
-    use tracing::debug;
-
     let mut current_ip = initial_ip;
 
     loop {
@@ -96,98 +87,102 @@ async fn run_ip_monitor_linux(
         // Backoff before reconnecting
         sleep(Duration::from_secs(5)).await;
     }
+}
 
-    #[allow(unreachable_code)]
-    async fn monitor_netlink_events(
-        current_ip: &mut String,
-        tx: &mpsc::UnboundedSender<IpChangeEvent>,
-    ) -> Result<()> {
-        // Create connection to receive address change notifications
-        let (mut conn, _handle, mut messages) = new_connection()?;
+/// Linux implementation: monitor netlink events for address changes
+#[cfg(target_os = "linux")]
+async fn monitor_netlink_events(
+    current_ip: &mut String,
+    tx: &mpsc::UnboundedSender<IpChangeEvent>,
+) -> Result<()> {
+    use crate::config::get_host_ip;
+    use futures_util::StreamExt;
+    use netlink_packet_core::NetlinkPayload;
+    use netlink_packet_route::RouteNetlinkMessage;
+    use netlink_sys::{AsyncSocket, SocketAddr};
+    use rtnetlink::constants::RTMGRP_IPV4_IFADDR;
+    use rtnetlink::new_connection;
 
-        // Subscribe to IPv4 address change multicast group
-        let addr = SocketAddr::new(0, RTMGRP_IPV4_IFADDR);
-        conn.socket_mut().socket_mut().bind(&addr)?;
+    // Create connection to receive address change notifications
+    let (mut conn, _handle, mut messages) = new_connection()?;
 
-        // Spawn the connection handler (required for messages to flow)
-        tokio::spawn(conn);
+    // Subscribe to IPv4 address change multicast group
+    let addr = SocketAddr::new(0, RTMGRP_IPV4_IFADDR);
+    conn.socket_mut().socket_mut().bind(&addr)?;
 
-        info!("IP address monitor started, current IP: {}", current_ip);
+    // Spawn the connection handler (required for messages to flow)
+    tokio::spawn(conn);
 
-        let mut last_event_time = std::time::Instant::now();
-        let mut pending_check = false;
+    info!("IP address monitor started, current IP: {}", current_ip);
 
-        loop {
-            // Use a timeout to periodically check if we should process pending events
-            let timeout = if pending_check {
-                Duration::from_millis(IP_CHANGE_DEBOUNCE_MS)
-            } else {
-                Duration::from_secs(60) // Long timeout when not waiting for debounce
-            };
+    let mut last_event_time = std::time::Instant::now();
+    let mut pending_check = false;
 
-            tokio::select! {
-                result = messages.next() => {
-                    match result {
-                        Some((message, _addr)) => {
-                            // Filter for address-related messages
-                            // The payload is wrapped in NetlinkPayload enum
-                            if let NetlinkPayload::InnerMessage(inner) = message.payload {
-                                match inner {
-                                    RouteNetlinkMessage::NewAddress(_)
-                                    | RouteNetlinkMessage::DelAddress(_) => {
-                                        debug!("Received address change notification");
-                                        pending_check = true;
-                                        last_event_time = std::time::Instant::now();
-                                    }
-                                    _ => {
-                                        // Ignore other message types
-                                    }
-                                }
-                            }
-                        }
-                        None => {
-                            // Stream ended
-                            return Ok(());
+    loop {
+        // Use a timeout to periodically check if we should process pending events
+        let timeout = if pending_check {
+            Duration::from_millis(IP_CHANGE_DEBOUNCE_MS)
+        } else {
+            Duration::from_secs(60) // Long timeout when not waiting for debounce
+        };
+
+        tokio::select! {
+            result = messages.next() => {
+                match result {
+                    Some((message, _addr)) => {
+                        // Filter for address-related messages
+                        if let NetlinkPayload::InnerMessage(
+                            RouteNetlinkMessage::NewAddress(_)
+                            | RouteNetlinkMessage::DelAddress(_),
+                        ) = message.payload
+                        {
+                            debug!("Received address change notification");
+                            pending_check = true;
+                            last_event_time = std::time::Instant::now();
                         }
                     }
-                }
-                _ = sleep(timeout) => {
-                    // Timeout - check if we should process pending events
+                    None => {
+                        // Stream ended
+                        return Ok(());
+                    }
                 }
             }
+            _ = sleep(timeout) => {
+                // Timeout - check if we should process pending events
+            }
+        }
 
-            // Check if debounce period has passed and we have a pending check
-            if pending_check
-                && last_event_time.elapsed() >= Duration::from_millis(IP_CHANGE_DEBOUNCE_MS)
-            {
-                pending_check = false;
+        // Check if debounce period has passed and we have a pending check
+        if pending_check
+            && last_event_time.elapsed() >= Duration::from_millis(IP_CHANGE_DEBOUNCE_MS)
+        {
+            pending_check = false;
 
-                // Get the new primary IP
-                match get_host_ip() {
-                    Ok(new_ip) => {
-                        if new_ip != *current_ip {
-                            info!("IP address changed: {} -> {}", current_ip, new_ip);
+            // Get the new primary IP
+            match get_host_ip() {
+                Ok(new_ip) => {
+                    if new_ip != *current_ip {
+                        info!("IP address changed: {} -> {}", current_ip, new_ip);
 
-                            let event = IpChangeEvent {
-                                old_ip: current_ip.clone(),
-                                new_ip: new_ip.clone(),
-                            };
+                        let event = IpChangeEvent {
+                            old_ip: current_ip.clone(),
+                            new_ip: new_ip.clone(),
+                        };
 
-                            *current_ip = new_ip;
+                        *current_ip = new_ip;
 
-                            if tx.send(event).is_err() {
-                                // Receiver dropped, exit monitor
-                                info!("IP monitor receiver dropped, exiting");
-                                return Ok(());
-                            }
-                        } else {
-                            debug!("Address event but primary IP unchanged: {}", current_ip);
+                        if tx.send(event).is_err() {
+                            // Receiver dropped, exit monitor
+                            info!("IP monitor receiver dropped, exiting");
+                            return Ok(());
                         }
+                    } else {
+                        debug!("Address event but primary IP unchanged: {}", current_ip);
                     }
-                    Err(e) => {
-                        warn!("Failed to get new IP after address change: {}", e);
-                        // Don't update current_ip, keep advertising old one
-                    }
+                }
+                Err(e) => {
+                    warn!("Failed to get new IP after address change: {}", e);
+                    // Don't update current_ip, keep advertising old one
                 }
             }
         }
